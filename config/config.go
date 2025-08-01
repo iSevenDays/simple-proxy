@@ -1,0 +1,457 @@
+package config
+
+import (
+	"bufio"
+	"claude-proxy/internal"
+	"context"
+	"fmt"
+	"log"
+	"os"
+	"regexp"
+	"strings"
+	
+	"gopkg.in/yaml.v3"
+)
+
+// Config represents the proxy configuration - all settings from .env
+type Config struct {
+	Port         string `json:"port"`
+
+	// Tool correction settings
+	ToolCorrectionEnabled bool `json:"tool_correction_enabled"`
+
+	// Empty tool result handling
+	HandleEmptyToolResults bool `json:"handle_empty_tool_results"` // Replace empty tool results with descriptive messages
+
+	// Tool filtering settings
+	SkipTools []string `json:"skip_tools"` // Tools to skip/filter out from requests
+
+	// Tool description overrides (loaded from tools_override.yaml)
+	ToolDescriptions map[string]string `json:"tool_descriptions"`
+
+	// Debug settings
+	PrintSystemMessage           bool `json:"print_system_message"`           // Print system messages to logs
+	DisableSmallModelLogging     bool `json:"disable_small_model_logging"`    // Disable logging for small model (Haiku) requests
+	DisableToolCorrectionLogging bool `json:"disable_tool_correction_logging"` // Disable logging for tool correction operations
+
+	// System message overrides (loaded from system_overrides.yaml)
+	SystemMessageOverrides SystemMessageOverrides `json:"system_message_overrides"`
+
+	// Model configuration (.env configurable)
+	BigModel         string `json:"big_model"`         // For Claude Sonnet requests
+	SmallModel       string `json:"small_model"`       // For Claude Haiku requests
+	CorrectionModel  string `json:"correction_model"`  // For tool correction service
+	
+	// Endpoint configuration (.env configurable)
+	BigModelEndpoint         string `json:"big_model_endpoint"`         // Endpoint for BIG_MODEL
+	SmallModelEndpoint       string `json:"small_model_endpoint"`       // Endpoint for SMALL_MODEL
+	ToolCorrectionEndpoint   string `json:"tool_correction_endpoint"`   // Endpoint for TOOL_CORRECTION_LLM
+	
+	// API Key configuration (.env configurable)
+	BigModelAPIKey           string `json:"big_model_api_key"`           // API Key for BIG_MODEL
+	SmallModelAPIKey         string `json:"small_model_api_key"`         // API Key for SMALL_MODEL
+	ToolCorrectionAPIKey     string `json:"tool_correction_api_key"`     // API Key for TOOL_CORRECTION_LLM
+}
+
+// GetDefaultConfig returns a default configuration for testing
+func GetDefaultConfig() *Config {
+	return &Config{
+		Port:                  "3456",
+		ToolCorrectionEnabled: true,
+		SkipTools:             []string{}, // Empty array by default
+		ToolDescriptions:      make(map[string]string), // Empty map by default
+		PrintSystemMessage:           false, // Disabled by default
+		DisableSmallModelLogging:     false, // Enabled by default (normal logging)
+		DisableToolCorrectionLogging: false, // Enabled by default (normal logging)
+		SystemMessageOverrides:       SystemMessageOverrides{}, // Empty by default
+		BigModel:               "",  // Will be set from .env
+		SmallModel:             "",  // Will be set from .env
+		CorrectionModel:        "",  // Will be set from .env
+		BigModelEndpoint:       "",  // Will be set from .env
+		SmallModelEndpoint:     "",  // Will be set from .env
+		ToolCorrectionEndpoint: "",  // Will be set from .env
+		BigModelAPIKey:         "",  // Will be set from .env
+		SmallModelAPIKey:       "",  // Will be set from .env
+		ToolCorrectionAPIKey:   "",  // Will be set from .env
+	}
+}
+
+// LoadConfigWithEnv loads configuration from .env file only - no CCR dependency
+func LoadConfigWithEnv() (*Config, error) {
+	// Load .env file for complete configuration - REQUIRED
+	envVars, err := loadEnvFile()
+	if err != nil {
+		return nil, fmt.Errorf(".env file is required for configuration: %v", err)
+	}
+
+	// Create new config with defaults
+	cfg := &Config{
+		Port:                   "3456", // Default port
+		ToolCorrectionEnabled:  true,   // Enable by default
+		HandleEmptyToolResults: true,   // Enable by default for API compliance
+		SkipTools:              []string{}, // Empty by default
+		ToolDescriptions:       make(map[string]string), // Empty by default
+		PrintSystemMessage:     false, // Disabled by default
+		SystemMessageOverrides: SystemMessageOverrides{}, // Empty by default
+	}
+
+	// All models and endpoints are required when .env exists - no fallbacks
+	if bigModel, exists := envVars["BIG_MODEL"]; exists && bigModel != "" {
+		cfg.BigModel = bigModel
+		log.Printf("🔧 Configured BIG_MODEL: %s", bigModel)
+	} else {
+		return nil, fmt.Errorf("BIG_MODEL must be set in .env file")
+	}
+
+	if smallModel, exists := envVars["SMALL_MODEL"]; exists && smallModel != "" {
+		cfg.SmallModel = smallModel
+		log.Printf("🔧 Configured SMALL_MODEL: %s", smallModel)
+	} else {
+		return nil, fmt.Errorf("SMALL_MODEL must be set in .env file")
+	}
+
+	if correctionModel, exists := envVars["CORRECTION_MODEL"]; exists && correctionModel != "" {
+		cfg.CorrectionModel = correctionModel
+		log.Printf("🔧 Configured CORRECTION_MODEL: %s", correctionModel)
+	} else {
+		return nil, fmt.Errorf("CORRECTION_MODEL must be set in .env file")
+	}
+
+	if bigEndpoint, exists := envVars["BIG_MODEL_ENDPOINT"]; exists && bigEndpoint != "" {
+		cfg.BigModelEndpoint = bigEndpoint
+		log.Printf("🔧 Configured BIG_MODEL_ENDPOINT: %s", bigEndpoint)
+	} else {
+		return nil, fmt.Errorf("BIG_MODEL_ENDPOINT must be set in .env file")
+	}
+
+	if smallEndpoint, exists := envVars["SMALL_MODEL_ENDPOINT"]; exists && smallEndpoint != "" {
+		cfg.SmallModelEndpoint = smallEndpoint
+		log.Printf("🔧 Configured SMALL_MODEL_ENDPOINT: %s", smallEndpoint)
+	} else {
+		return nil, fmt.Errorf("SMALL_MODEL_ENDPOINT must be set in .env file")
+	}
+
+	if bigAPIKey, exists := envVars["BIG_MODEL_API_KEY"]; exists && bigAPIKey != "" {
+		cfg.BigModelAPIKey = bigAPIKey
+		log.Printf("🔧 Configured BIG_MODEL_API_KEY: %s", maskAPIKey(bigAPIKey))
+	} else {
+		return nil, fmt.Errorf("BIG_MODEL_API_KEY must be set in .env file")
+	}
+
+	if smallAPIKey, exists := envVars["SMALL_MODEL_API_KEY"]; exists && smallAPIKey != "" {
+		cfg.SmallModelAPIKey = smallAPIKey
+		log.Printf("🔧 Configured SMALL_MODEL_API_KEY: %s", maskAPIKey(smallAPIKey))
+	} else {
+		return nil, fmt.Errorf("SMALL_MODEL_API_KEY must be set in .env file")
+	}
+
+	if toolCorrectionEndpoint, exists := envVars["TOOL_CORRECTION_ENDPOINT"]; exists && toolCorrectionEndpoint != "" {
+		cfg.ToolCorrectionEndpoint = toolCorrectionEndpoint
+		log.Printf("🔧 Configured TOOL_CORRECTION_ENDPOINT: %s", toolCorrectionEndpoint)
+	} else {
+		return nil, fmt.Errorf("TOOL_CORRECTION_ENDPOINT must be set in .env file")
+	}
+
+	if toolCorrectionAPIKey, exists := envVars["TOOL_CORRECTION_API_KEY"]; exists && toolCorrectionAPIKey != "" {
+		cfg.ToolCorrectionAPIKey = toolCorrectionAPIKey
+		log.Printf("🔧 Configured TOOL_CORRECTION_API_KEY: %s", maskAPIKey(toolCorrectionAPIKey))
+	} else {
+		return nil, fmt.Errorf("TOOL_CORRECTION_API_KEY must be set in .env file")
+	}
+
+	// Parse SKIP_TOOLS (optional, comma-separated list)
+	if skipTools, exists := envVars["SKIP_TOOLS"]; exists && skipTools != "" {
+		// Split by comma and trim whitespace
+		tools := strings.Split(skipTools, ",")
+		for i, tool := range tools {
+			tools[i] = strings.TrimSpace(tool)
+		}
+		// Filter out empty strings
+		filteredTools := make([]string, 0, len(tools))
+		for _, tool := range tools {
+			if tool != "" {
+				filteredTools = append(filteredTools, tool)
+			}
+		}
+		cfg.SkipTools = filteredTools
+		log.Printf("🚫 Configured SKIP_TOOLS: %v", cfg.SkipTools)
+	}
+
+	// Parse PRINT_SYSTEM_MESSAGE (optional, defaults to false)
+	if printSystemMessage, exists := envVars["PRINT_SYSTEM_MESSAGE"]; exists {
+		if printSystemMessage == "true" || printSystemMessage == "1" {
+			cfg.PrintSystemMessage = true
+			log.Printf("🖨️  Configured PRINT_SYSTEM_MESSAGE: enabled")
+		} else {
+			cfg.PrintSystemMessage = false
+			log.Printf("🖨️  Configured PRINT_SYSTEM_MESSAGE: disabled")
+		}
+	}
+
+	// Parse DISABLE_SMALL_MODEL_LOGGING (optional, defaults to false)
+	if disableSmallLogging, exists := envVars["DISABLE_SMALL_MODEL_LOGGING"]; exists {
+		if disableSmallLogging == "true" || disableSmallLogging == "1" {
+			cfg.DisableSmallModelLogging = true
+			log.Printf("🔇 Configured DISABLE_SMALL_MODEL_LOGGING: enabled (Haiku logging disabled)")
+		} else {
+			cfg.DisableSmallModelLogging = false
+			log.Printf("🔊 Configured DISABLE_SMALL_MODEL_LOGGING: disabled (normal logging)")
+		}
+	}
+
+	// Parse DISABLE_TOOL_CORRECTION_LOGGING (optional, defaults to false)
+	if disableToolCorrectionLogging, exists := envVars["DISABLE_TOOL_CORRECTION_LOGGING"]; exists {
+		if disableToolCorrectionLogging == "true" || disableToolCorrectionLogging == "1" {
+			cfg.DisableToolCorrectionLogging = true
+			log.Printf("🔇 Configured DISABLE_TOOL_CORRECTION_LOGGING: enabled (tool correction logging disabled)")
+		} else {
+			cfg.DisableToolCorrectionLogging = false
+			log.Printf("🔊 Configured DISABLE_TOOL_CORRECTION_LOGGING: disabled (normal logging)")
+		}
+	}
+
+	// Parse HANDLE_EMPTY_TOOL_RESULTS (optional, defaults to true)
+	if handleEmptyResults, exists := envVars["HANDLE_EMPTY_TOOL_RESULTS"]; exists {
+		if handleEmptyResults == "false" || handleEmptyResults == "0" {
+			cfg.HandleEmptyToolResults = false
+			log.Printf("🔧 Configured HANDLE_EMPTY_TOOL_RESULTS: disabled")
+		} else {
+			cfg.HandleEmptyToolResults = true
+			log.Printf("🔧 Configured HANDLE_EMPTY_TOOL_RESULTS: enabled")
+		}
+	}
+
+	// Load tool description overrides from YAML file
+	toolDescriptions, err := LoadToolDescriptions()
+	if err != nil {
+		log.Printf("⚠️  Warning: Failed to load tool descriptions from tools_override.yaml: %v", err)
+		// Continue with empty tool descriptions instead of failing
+	} else {
+		cfg.ToolDescriptions = toolDescriptions
+	}
+
+	// Load system message overrides from YAML file
+	systemOverrides, err := LoadSystemMessageOverrides()
+	if err != nil {
+		log.Printf("⚠️  Warning: Failed to load system message overrides from system_overrides.yaml: %v", err)
+		// Continue with empty system overrides instead of failing
+	} else {
+		cfg.SystemMessageOverrides = systemOverrides
+	}
+
+	return cfg, nil
+}
+
+// maskAPIKey masks an API key for safe logging
+func maskAPIKey(apiKey string) string {
+	if len(apiKey) <= 8 {
+		return "***"
+	}
+	return apiKey[:4] + "..." + apiKey[len(apiKey)-4:]
+}
+
+// loadEnvFile loads environment variables from .env file in current directory
+func loadEnvFile() (map[string]string, error) {
+	envVars := make(map[string]string)
+	
+	file, err := os.Open(".env")
+	if err != nil {
+		return envVars, err
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		
+		// Skip empty lines and comments
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		
+		// Parse KEY=VALUE format
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		
+		key := strings.TrimSpace(parts[0])
+		value := strings.TrimSpace(parts[1])
+		
+		// Remove comments from value
+		if commentIndex := strings.Index(value, "#"); commentIndex != -1 {
+			value = strings.TrimSpace(value[:commentIndex])
+		}
+		
+		envVars[key] = value
+	}
+	
+	return envVars, scanner.Err()
+}
+
+// MapModelName translates Claude Code model names to configured provider-specific names
+func (c *Config) MapModelName(ctx context.Context, claudeModel string) string {
+	// Extract request ID from context for logging (if available)
+	requestID := internal.GetRequestID(ctx)
+
+	modelMap := map[string]string{
+		"claude-3-5-haiku-20241022": c.SmallModel, // Haiku → SMALL_MODEL
+		"claude-sonnet-4-20250514":  c.BigModel,   // Sonnet → BIG_MODEL
+		// Add other mappings as needed
+	}
+
+	if mapped, exists := modelMap[claudeModel]; exists {
+		log.Printf("🔄[%s] Model mapping: %s → %s", requestID, claudeModel, mapped)
+		return mapped
+	}
+
+	// Default to original name if no mapping exists
+	return claudeModel
+}
+
+// GetToolDescription returns the override description if available, otherwise returns original
+func (c *Config) GetToolDescription(toolName, originalDescription string) string {
+	return GetToolDescription(c.ToolDescriptions, toolName, originalDescription)
+}
+
+// ToolDescriptionsYAML represents the structure of tools_override.yaml
+type ToolDescriptionsYAML struct {
+	ToolDescriptions map[string]string `yaml:"toolDescriptions"`
+}
+
+// LoadToolDescriptions loads tool description overrides from tools_override.yaml
+// Returns empty map if file doesn't exist (no error)
+func LoadToolDescriptions() (map[string]string, error) {
+	file, err := os.Open("tools_override.yaml")
+	if err != nil {
+		if os.IsNotExist(err) {
+			// File doesn't exist - return empty map, no error
+			log.Printf("📝 tools_override.yaml not found, using original tool descriptions")
+			return make(map[string]string), nil
+		}
+		return nil, fmt.Errorf("failed to open tools_override.yaml: %v", err)
+	}
+	defer file.Close()
+
+	var yamlData ToolDescriptionsYAML
+	decoder := yaml.NewDecoder(file)
+	if err := decoder.Decode(&yamlData); err != nil {
+		return nil, fmt.Errorf("failed to parse tools_override.yaml: %v", err)
+	}
+
+	if yamlData.ToolDescriptions == nil {
+		yamlData.ToolDescriptions = make(map[string]string)
+	}
+
+	log.Printf("📝 Loaded %d tool description overrides from tools_override.yaml", len(yamlData.ToolDescriptions))
+	for toolName := range yamlData.ToolDescriptions {
+		log.Printf("   - %s: custom description loaded", toolName)
+	}
+
+	return yamlData.ToolDescriptions, nil
+}
+
+// GetToolDescription returns the override description if available, otherwise returns original
+func GetToolDescription(overrides map[string]string, toolName, originalDescription string) string {
+	if override, exists := overrides[toolName]; exists {
+		return override
+	}
+	return originalDescription
+}
+
+// SystemMessageReplacement represents a find/replace operation for system messages
+type SystemMessageReplacement struct {
+	Find    string `yaml:"find"`
+	Replace string `yaml:"replace"`
+}
+
+// SystemMessageOverrides represents system message modification configuration
+type SystemMessageOverrides struct {
+	RemovePatterns []string                   `yaml:"removePatterns"`
+	Replacements   []SystemMessageReplacement `yaml:"replacements"`
+	Prepend        string                     `yaml:"prepend"`
+	Append         string                     `yaml:"append"`
+}
+
+// SystemMessageOverridesYAML represents the structure of system_overrides.yaml
+type SystemMessageOverridesYAML struct {
+	SystemMessageOverrides SystemMessageOverrides `yaml:"systemMessageOverrides"`
+}
+
+// LoadSystemMessageOverrides loads system message overrides from system_overrides.yaml
+// Returns empty struct if file doesn't exist (no error)
+func LoadSystemMessageOverrides() (SystemMessageOverrides, error) {
+	file, err := os.Open("system_overrides.yaml")
+	if err != nil {
+		if os.IsNotExist(err) {
+			// File doesn't exist - return empty struct, no error
+			log.Printf("📝 system_overrides.yaml not found, using original system messages")
+			return SystemMessageOverrides{}, nil
+		}
+		return SystemMessageOverrides{}, fmt.Errorf("failed to open system_overrides.yaml: %v", err)
+	}
+	defer file.Close()
+
+	var yamlData SystemMessageOverridesYAML
+	decoder := yaml.NewDecoder(file)
+	if err := decoder.Decode(&yamlData); err != nil {
+		return SystemMessageOverrides{}, fmt.Errorf("failed to parse system_overrides.yaml: %v", err)
+	}
+
+	overrides := yamlData.SystemMessageOverrides
+	log.Printf("📝 Loaded system message overrides from system_overrides.yaml:")
+	log.Printf("   - Remove patterns: %d", len(overrides.RemovePatterns))
+	log.Printf("   - Replacements: %d", len(overrides.Replacements))
+	log.Printf("   - Prepend: %t", overrides.Prepend != "")
+	log.Printf("   - Append: %t", overrides.Append != "")
+
+	return overrides, nil
+}
+
+// ApplySystemMessageOverrides applies system message modifications
+// Operations are applied in order: removePatterns -> replacements -> prepend/append
+func ApplySystemMessageOverrides(originalMessage string, overrides SystemMessageOverrides) string {
+	message := originalMessage
+
+	// Apply remove patterns (regex-based removal)
+	for _, pattern := range overrides.RemovePatterns {
+		re, err := regexp.Compile(pattern)
+		if err != nil {
+			log.Printf("⚠️  Warning: Invalid regex pattern '%s': %v", pattern, err)
+			continue
+		}
+		
+		// Find matches before removing them
+		matches := re.FindAllString(message, -1)
+		if len(matches) > 0 {
+			for _, match := range matches {
+				log.Printf("🔍 removePattern detected, removed '%s' for pattern '%s'", match, pattern)
+			}
+			message = re.ReplaceAllString(message, "")
+		}
+	}
+
+	// Apply replacements
+	for _, replacement := range overrides.Replacements {
+		if strings.Contains(message, replacement.Find) {
+			oldMessage := message
+			message = strings.ReplaceAll(message, replacement.Find, replacement.Replace)
+			// Count occurrences replaced
+			occurrences := strings.Count(oldMessage, replacement.Find)
+			log.Printf("🔄 replacement applied: '%s' → '%s' (%d occurrences)", 
+				replacement.Find, replacement.Replace, occurrences)
+		}
+	}
+
+	// Apply prepend and append
+	if overrides.Prepend != "" {
+		message = overrides.Prepend + message
+		log.Printf("➕ prepend applied: '%s'", strings.TrimSpace(overrides.Prepend))
+	}
+	if overrides.Append != "" {
+		message = message + overrides.Append
+		log.Printf("➕ append applied: '%s'", strings.TrimSpace(overrides.Append))
+	}
+
+	return message
+}

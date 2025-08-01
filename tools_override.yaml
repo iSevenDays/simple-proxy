@@ -1,0 +1,149 @@
+# Tool Description Overrides Configuration
+# This file allows customization of tool descriptions sent to backend models
+# Format: toolName: "description text"
+
+toolDescriptions:
+  Bash: |
+    Executes a given bash command in a persistent shell session with optional timeout, ensuring proper handling and security measures.
+
+    Before executing the command, please follow these steps:
+
+    1. Directory Verification:
+     - If the command will create new directories or files, first use the LS tool to verify the parent directory exists and is the correct location
+     - For example, before running "mkdir foo/bar", first use LS to check that "foo" exists and is the intended parent directory
+
+    2. Command Execution:
+     - Always quote file paths that contain spaces with double quotes (e.g., cd "path with spaces/file.txt")
+     - Examples of proper quoting:
+     - cd "/Users/name/My Documents" (correct)
+     - cd /Users/name/My Documents (incorrect - will fail)
+     - python "/path/with spaces/script.py" (correct)
+     - python /path/with spaces/script.py (incorrect - will fail)
+     - After ensuring proper quoting, execute the command.
+     - Capture the output of the command.
+
+    Usage notes:
+     - The command argument is required.
+     - You can specify an optional timeout in milliseconds (up to 600000ms / 10 minutes). If not specified, commands will timeout after 120000ms (2 minutes).
+     - It is very helpful if you write a clear, concise description of what this command does in 5-10 words.
+     - If the output exceeds 30000 characters, output will be truncated before being returned to you.
+     - VERY IMPORTANT: You MUST avoid using search commands like `find` and `grep`. Instead use Grep, Glob, or Task to search. You MUST avoid read tools like `cat`, `head`, `tail`, and `ls`, and use Read and LS to read files.
+     - If you _still_ need to run `grep`, STOP. ALWAYS USE ripgrep at `rg` first, which all ${PRODUCT_NAME} users have pre-installed.
+     - When issuing multiple commands, use the ';' or '&&' operator to separate them. DO NOT use newlines (newlines are ok in quoted strings).
+     - Try to maintain your current working directory throughout the session by using absolute paths and avoiding usage of `cd`. You may use `cd` if the User explicitly requests it.
+     <good-example>
+     pytest /foo/bar/tests
+     </good-example>
+     <bad-example>
+     cd /foo/bar && pytest tests
+     </bad-example>
+
+
+
+    # Committing changes with git
+
+    When the user asks you to create a new git commit, follow these steps carefully:
+
+    1. You have the capability to call multiple tools in a single response. When multiple independent pieces of information are requested, batch your tool calls together for optimal performance. ALWAYS run the following bash commands in parallel, each using the Bash tool:
+     - Run a git status command to see all untracked files.
+     - Run a git diff command to see both staged and unstaged changes that will be committed.
+     - Run a git log command to see recent commit messages, so that you can follow this repository's commit message style.
+    2. Analyze all staged changes (both previously staged and newly added) and draft a commit message:
+     - Summarize the nature of the changes (eg. new feature, enhancement to an existing feature, bug fix, refactoring, test, docs, etc.). Ensure the message accurately reflects the changes and their purpose (i.e. "add" means a wholly new feature, "update" means an enhancement to an existing feature, "fix" means a bug fix, etc.).
+     - Check for any sensitive information that shouldn't be committed
+     - Draft a concise (1-2 sentences) commit message that focuses on the "why" rather than the "what"
+     - Ensure it accurately reflects the changes and their purpose
+    3. You have the capability to call multiple tools in a single response. When multiple independent pieces of information are requested, batch your tool calls together for optimal performance. ALWAYS run the following commands in parallel:
+     - Add relevant untracked files to the staging area.
+     - Run git status to make sure the commit succeeded.
+    4. If the commit fails due to pre-commit hook changes, retry the commit ONCE to include these automated changes. If it fails again, it usually means a pre-commit hook is preventing the commit. If the commit succeeds but you notice that files were modified by the pre-commit hook, you MUST amend your commit to include them.
+
+    Important notes:
+    - NEVER update the git config
+    - NEVER run additional commands to read or explore code, besides git bash commands
+    - NEVER use the TodoWrite or Task tools
+    - DO NOT push to the remote repository unless the user explicitly asks you to do so
+    - IMPORTANT: Never use git commands with the -i flag (like git rebase -i or git add -i) since they require interactive input which is not supported.
+    - If there are no changes to commit (i.e., no untracked files and no modifications), do not create an empty commit
+    - In order to ensure good formatting, ALWAYS pass the commit message via a HEREDOC, a la this example:
+    <example>
+    git commit -m "$(cat <<'EOF'
+     Commit message here.
+     EOF
+     )"
+    </example>
+
+  Task: |
+    Launch a new agent to handle complex, multi-step tasks autonomously.
+    
+    Available agent types and the tools they have access to:
+    - general-purpose: General-purpose agent for researching complex questions, searching for code, and executing multi-step tasks. When you are searching for a keyword or file and are not confident that you will find the right match in the first few tries use this agent to perform the search for you. (Tools: *)
+    
+    When using the Task tool, you must specify a subagent_type parameter to select which agent type to use.
+    
+    When to use the Agent tool:
+    - When you are instructed to execute custom slash commands. Use the Agent tool with the slash command invocation as the entire prompt. The slash command can take arguments. For example: Task(description="Check the file", prompt="/check-file path/to/file.py")
+    
+    When NOT to use the Agent tool:
+    - If you want to read a specific file path, use the Read or Glob tool instead of the Agent tool, to find the match more quickly
+    - If you are searching for a specific class definition like "class Foo", use the Glob tool instead, to find the match more quickly
+    - If you are searching for code within a specific file or set of 2-3 files, use the Read tool instead of the Agent tool, to find the match more quickly
+    - Other tasks that are not related to the agent descriptions above
+    
+    Usage notes:
+    1. Launch multiple agents concurrently whenever possible, to maximize performance; to do that, use a single message with multiple tool uses
+    2. When the agent is done, it will return a single message back to you. The result returned by the agent is not visible to the user. To show the user the result, you should send a text message back to the user with a concise summary of the result.
+    3. Each agent invocation is stateless. You will not be able to send additional messages to the agent, nor will the agent be able to communicate with you outside of its final report. Therefore, your prompt should contain a highly detailed task description for the agent to perform autonomously and you should specify exactly what information the agent should return back to you in its final and only message to you.
+    4. The agent's outputs should generally be trusted
+    5. Clearly tell the agent whether you expect it to write code or just to do research (search, file reads, web fetches, etc.), since it is not aware of the user's intent
+    6. If the agent description mentions that it should be used proactively, then you should try your best to use it without the user having to ask for it first. Use your judgement.
+    
+    Example usage:
+    
+    <example_agent_descriptions>
+    "code-reviewer": use this agent after you are done writing a significant piece of code
+    "greeting-responder": use this agent when to respond to user greetings with a friendly joke
+    </example_agent_description>
+    
+    <example>
+    user: "Please write a function that checks if a number is prime"
+    assistant: Sure let me write a function that checks if a number is prime
+    assistant: First let me use the Write tool to write a function that checks if a number is prime
+    assistant: I'm going to use the Write tool to write the following code:
+    <code>
+    function isPrime(n) {
+      if (n <= 1) return false
+      for (let i = 2; i * i <= n; i++) {
+        if (n % i === 0) return false
+      }
+      return true
+    }
+    </code>
+    <commentary>
+    Since a significant piece of code was written and the task was completed, now use the code-reviewer agent to review the code
+    </commentary>
+    assistant: Now let me use the code-reviewer agent to review the code
+    assistant: Uses the Task tool to launch the with the code-reviewer agent 
+    </example>
+    
+    <example>
+    user: "Hello"
+    <commentary>
+    Since the user is greeting, use the greeting-responder agent to respond with a friendly joke
+    </commentary>
+    assistant: "I'm going to use the Task tool to launch the with the greeting-responder agent"
+    </example>
+
+  Read: |
+    Reads a file from the local filesystem. You can access any file directly by using this tool.
+    Assume this tool is able to read all files on the machine. If the User provides a path to a file assume that path is valid. It is okay to read a file that does not exist; an error will be returned.
+
+    Usage:
+    - The file_path parameter must be an absolute path, not a relative path
+    - By default, it reads up to 2000 lines starting from the beginning of the file
+    - You can optionally specify a line offset and limit (especially handy for long files), but it's recommended to read the whole file by not providing these parameters
+    - Any lines longer than 2000 characters will be truncated
+    - Results are returned using cat -n format, with line numbers starting at 1
+    - You have the capability to call multiple tools in a single response. It is always better to speculatively read multiple files as a batch that are potentially useful.
+    - You will regularly be asked to read screenshots. If the user provides a path to a screenshot ALWAYS use this tool to view the file at the path. This tool will work with all temporary file paths like /var/folders/123/abc/T/TemporaryItems/NSIRD_screencaptureui_ZfB1tD/file.txt
+    - If you read a file that exists but has empty contents you will receive a system reminder warning in place of file contents.

@@ -1,0 +1,22 @@
+# System Message Override Configuration
+# This file allows customization of system messages sent to backend models
+# Modifications are applied in order: removePatterns -> replacements -> prepend/append
+
+systemMessageOverrides:
+  # Remove specific sentences/patterns
+  removePatterns:
+    - "IMPORTANT: Assist with defensive security tasks only[^.]*\\."
+
+  # Replace specific text
+  replacements:
+    - find: "Claude Code"
+      replace: "AI Assistant"
+    - find: "Anthropic's official CLI"
+      replace: "AI CLI Assistant"
+
+  # Prepend/append custom content
+  prepend: |
+    You are an expert coding assistant with access to powerful tools.
+
+  append: |
+    Always prioritize code quality and best practices.
