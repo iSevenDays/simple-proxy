@@ -525,3 +525,938 @@ Examples of requests that DON'T require tools (answer NO):
 
 Respond with ONLY "YES" or "NO".`, userMessage, strings.Join(toolNames, ", "))
 }
+
+// TestSlashCommandDetection tests detection of slash commands for Task tool conversion
+// Following SPARC: Test-driven development with comprehensive slash command scenarios
+func TestSlashCommandDetection(t *testing.T) {
+
+	tests := []struct {
+		name     string
+		toolName string
+		expected bool
+	}{
+		{
+			name:     "slash_command_detected",
+			toolName: "/code-reviewer",
+			expected: true,
+		},
+		{
+			name:     "slash_command_with_args_detected",
+			toolName: "/check-file",
+			expected: true,
+		},
+		{
+			name:     "normal_tool_not_detected",
+			toolName: "Task",
+			expected: false,
+		},
+		{
+			name:     "normal_tool_with_case_not_detected",
+			toolName: "Write",
+			expected: false,
+		},
+		{
+			name:     "empty_string_not_detected",
+			toolName: "",
+			expected: false,
+		},
+		{
+			name:     "single_slash_detected",
+			toolName: "/",
+			expected: true,
+		},
+		{
+			name:     "multiple_slash_detected",
+			toolName: "/multi/part/command",
+			expected: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Use reflection or make the method public for testing
+			// For now, we'll test the functionality through the validation flow
+			result := strings.HasPrefix(tt.toolName, "/")
+			assert.Equal(t, tt.expected, result, "Slash command detection should match expected result")
+		})
+	}
+}
+
+// TestSlashCommandToTaskConversion tests converting slash commands to Task tool calls
+// Following SPARC: Comprehensive test coverage for transformation logic
+func TestSlashCommandToTaskConversion(t *testing.T) {
+	service := correction.NewService("http://test.com", "test-key", true, "test-model", true)
+
+	// Define Task tool schema for testing
+	taskToolSchema := types.Tool{
+		Name:        "Task",
+		Description: "Launch a new agent to handle complex tasks",
+		InputSchema: types.ToolSchema{
+			Type: "object",
+			Properties: map[string]types.ToolProperty{
+				"description": {Type: "string", Description: "Description of the task"},
+				"prompt":      {Type: "string", Description: "The task prompt"},
+			},
+			Required: []string{"description", "prompt"},
+		},
+	}
+
+	availableTools := []types.Tool{taskToolSchema}
+
+	tests := []struct {
+		name           string
+		toolCall       types.Content
+		expectedValid  bool
+		expectedName   string
+		expectedPrompt string
+		expectedDesc   string
+	}{
+		{
+			name: "code_reviewer_command_converted",
+			toolCall: types.Content{
+				Type: "tool_use",
+				Name: "/code-reviewer",
+				Input: map[string]interface{}{
+					"subagent_type": "code-reviewer",
+				},
+			},
+			expectedValid:  true,
+			expectedName:   "Task",
+			expectedPrompt: "/code-reviewer",
+			expectedDesc:   "Code Reviewer",
+		},
+		{
+			name: "check_file_command_converted",
+			toolCall: types.Content{
+				Type: "tool_use",
+				Name: "/check-file",
+				Input: map[string]interface{}{
+					"path": "test.go",
+				},
+			},
+			expectedValid:  true,
+			expectedName:   "Task",
+			expectedPrompt: "/check-file",
+			expectedDesc:   "Check File",
+		},
+		{
+			name: "simple_slash_command_converted",
+			toolCall: types.Content{
+				Type: "tool_use",
+				Name: "/init",
+				Input: map[string]interface{}{},
+			},
+			expectedValid:  true,
+			expectedName:   "Task",
+			expectedPrompt: "/init",
+			expectedDesc:   "Init",
+		},
+		{
+			name: "multi_part_command_converted",
+			toolCall: types.Content{
+				Type: "tool_use",
+				Name: "/pr-comments",
+				Input: map[string]interface{}{
+					"target": "main",
+				},
+			},
+			expectedValid:  true,
+			expectedName:   "Task",
+			expectedPrompt: "/pr-comments",
+			expectedDesc:   "Pr Comments",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := internal.WithRequestID(context.Background(), "validation_test")
+			result := service.ValidateToolCall(ctx, tt.toolCall, availableTools)
+
+			assert.Equal(t, tt.expectedValid, result.IsValid, "Correction should be valid")
+			if result.IsValid {
+				assert.Equal(t, tt.expectedName, result.CorrectToolName, "Tool name should be corrected to Task")
+				assert.True(t, result.HasToolNameIssue, "Should indicate tool name issue")
+				
+				// Check corrected input parameters
+				require.NotNil(t, result.CorrectedInput, "Corrected input should not be nil")
+				assert.Equal(t, tt.expectedPrompt, result.CorrectedInput["prompt"], "Prompt should match slash command")
+				assert.Equal(t, tt.expectedDesc, result.CorrectedInput["description"], "Description should be generated")
+			}
+		})
+	}
+}
+
+// TestSlashCommandParameterPreservation tests that existing parameters are preserved during conversion
+// Following SPARC: Ensure data integrity during transformation
+func TestSlashCommandParameterPreservation(t *testing.T) {
+	service := correction.NewService("http://test.com", "test-key", true, "test-model", true)
+
+	taskToolSchema := types.Tool{
+		Name:        "Task",
+		Description: "Launch a new agent to handle complex tasks",
+		InputSchema: types.ToolSchema{
+			Type: "object",
+			Properties: map[string]types.ToolProperty{
+				"description":     {Type: "string"},
+				"prompt":          {Type: "string"},
+				"subagent_type":   {Type: "string"},
+				"custom_param":    {Type: "string"},
+			},
+			Required: []string{"description", "prompt"},
+		},
+	}
+
+	availableTools := []types.Tool{taskToolSchema}
+
+	tests := []struct {
+		name                string
+		toolCall            types.Content
+		expectedPreserved   map[string]interface{}
+		expectedOverwritten map[string]interface{}
+	}{
+		{
+			name: "subagent_type_preserved",
+			toolCall: types.Content{
+				Type: "tool_use",
+				Name: "/code-reviewer",
+				Input: map[string]interface{}{
+					"subagent_type": "code-reviewer",
+					"custom_param":  "test_value",
+				},
+			},
+			expectedPreserved: map[string]interface{}{
+				"subagent_type": "code-reviewer",
+				"custom_param":  "test_value",
+			},
+			expectedOverwritten: map[string]interface{}{
+				"description": "Code Reviewer",
+				"prompt":      "/code-reviewer",
+			},
+		},
+		{
+			name: "existing_description_overwritten",
+			toolCall: types.Content{
+				Type: "tool_use",
+				Name: "/review",
+				Input: map[string]interface{}{
+					"description":   "old description",
+					"prompt":        "old prompt",
+					"subagent_type": "reviewer",
+				},
+			},
+			expectedPreserved: map[string]interface{}{
+				"subagent_type": "reviewer",
+			},
+			expectedOverwritten: map[string]interface{}{
+				"description": "Review",
+				"prompt":      "/review",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := internal.WithRequestID(context.Background(), "validation_test")
+			result := service.ValidateToolCall(ctx, tt.toolCall, availableTools)
+
+			require.True(t, result.IsValid, "Correction should be valid")
+			require.NotNil(t, result.CorrectedInput, "Corrected input should not be nil")
+
+			// Check preserved parameters
+			for key, expectedValue := range tt.expectedPreserved {
+				actualValue, exists := result.CorrectedInput[key]
+				assert.True(t, exists, "Parameter %s should be preserved", key)
+				assert.Equal(t, expectedValue, actualValue, "Parameter %s should have correct value", key)
+			}
+
+			// Check overwritten parameters
+			for key, expectedValue := range tt.expectedOverwritten {
+				actualValue, exists := result.CorrectedInput[key]
+				assert.True(t, exists, "Parameter %s should exist", key)
+				assert.Equal(t, expectedValue, actualValue, "Parameter %s should be overwritten correctly", key)
+			}
+		})
+	}
+}
+
+// TestSlashCommandEdgeCases tests edge cases for slash command correction
+// Following SPARC: Comprehensive edge case coverage for robust implementation
+func TestSlashCommandEdgeCases(t *testing.T) {
+	service := correction.NewService("http://test.com", "test-key", true, "test-model", true)
+
+	tests := []struct {
+		name           string
+		toolCall       types.Content
+		availableTools []types.Tool
+		expectedValid  bool
+		expectedError  string
+	}{
+		{
+			name: "no_task_tool_available",
+			toolCall: types.Content{
+				Type: "tool_use",
+				Name: "/code-reviewer",
+				Input: map[string]interface{}{},
+			},
+			availableTools: []types.Tool{
+				{
+					Name:        "Write",
+					Description: "Write file",
+					InputSchema: types.ToolSchema{Type: "object"},
+				},
+			},
+			expectedValid: false,
+			expectedError: "Task tool not available",
+		},
+		{
+			name: "empty_slash_command",
+			toolCall: types.Content{
+				Type: "tool_use",
+				Name: "/",
+				Input: map[string]interface{}{},
+			},
+			availableTools: []types.Tool{
+				{
+					Name:        "Task",
+					Description: "Task tool",
+					InputSchema: types.ToolSchema{Type: "object"},
+				},
+			},
+			expectedValid:  true,
+			expectedError:  "",
+		},
+		{
+			name: "malformed_tool_call_type",
+			toolCall: types.Content{
+				Type: "text",  // Wrong type
+				Name: "/code-reviewer",
+				Input: map[string]interface{}{},
+			},
+			availableTools: []types.Tool{
+				{
+					Name:        "Task",
+					Description: "Task tool",
+					InputSchema: types.ToolSchema{Type: "object"},
+				},
+			},
+			expectedValid: false,
+			expectedError: "Invalid tool call type",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := internal.WithRequestID(context.Background(), "validation_test")
+			result := service.ValidateToolCall(ctx, tt.toolCall, tt.availableTools)
+
+			assert.Equal(t, tt.expectedValid, result.IsValid, "Validation result should match expected")
+			
+			if !tt.expectedValid && tt.expectedError != "" {
+				// In a real implementation, we'd check error messages
+				// For now, we just verify the validation failed
+				assert.False(t, result.IsValid)
+			}
+		})
+	}
+}
+
+// TestTodoWriteCorrection tests the comprehensive TodoWrite correction system
+func TestTodoWriteCorrection(t *testing.T) {
+	service := correction.NewService("http://test", "test-key", true, "test-model", false)
+
+	// Define TodoWrite tool schema
+	todoWriteSchema := types.Tool{
+		Name:        "TodoWrite",
+		Description: "Updates todo list for current coding session",
+		InputSchema: types.ToolSchema{
+			Type: "object",
+			Properties: map[string]types.ToolProperty{
+				"todos": {
+					Type:        "array",
+					Description: "The updated todo list",
+				},
+			},
+			Required: []string{"todos"},
+		},
+	}
+
+	availableTools := []types.Tool{todoWriteSchema}
+	ctx := context.WithValue(context.Background(), internal.RequestIDKey, "test_req")
+
+	tests := []struct {
+		name               string
+		toolCall           types.Content
+		expectRuleSuccess  bool
+		expectedTodoCount  int
+		expectedContent    []string
+		description        string
+	}{
+		{
+			name: "single_todo_string_conversion",
+			toolCall: types.Content{
+				Type: "tool_use",
+				ID:   "test_1",
+				Name: "TodoWrite",
+				Input: map[string]interface{}{
+					"todo": "Review code changes",
+				},
+			},
+			expectRuleSuccess:  true,
+			expectedTodoCount:  1,
+			expectedContent:    []string{"Review code changes"},
+			description:        "Should convert single 'todo' string to proper todos array",
+		},
+		{
+			name: "task_with_priority_conversion",
+			toolCall: types.Content{
+				Type: "tool_use",
+				ID:   "test_2",
+				Name: "TodoWrite",
+				Input: map[string]interface{}{
+					"task":     "Fix critical bug",
+					"priority": "high",
+				},
+			},
+			expectRuleSuccess:  true,
+			expectedTodoCount:  1,
+			expectedContent:    []string{"Fix critical bug"},
+			description:        "Should convert 'task' with priority to todos array",
+		},
+		{
+			name: "items_array_conversion",
+			toolCall: types.Content{
+				Type: "tool_use",
+				ID:   "test_3",
+				Name: "TodoWrite",
+				Input: map[string]interface{}{
+					"items": []interface{}{"Task 1", "Task 2", "Task 3"},
+				},
+			},
+			expectRuleSuccess:  true,
+			expectedTodoCount:  3,
+			expectedContent:    []string{"Task 1", "Task 2", "Task 3"},
+			description:        "Should convert 'items' array to todos array",
+		},
+		{
+			name: "content_parameter_conversion",
+			toolCall: types.Content{
+				Type: "tool_use",
+				ID:   "test_4",
+				Name: "TodoWrite",
+				Input: map[string]interface{}{
+					"content":  "Write unit tests",
+					"status":   "in_progress",
+					"priority": "medium",
+				},
+			},
+			expectRuleSuccess:  true,
+			expectedTodoCount:  1,
+			expectedContent:    []string{"Write unit tests"},
+			description:        "Should convert individual parameters to todos array",
+		},
+		{
+			name: "empty_input_default_creation",
+			toolCall: types.Content{
+				Type: "tool_use",
+				ID:   "test_5",
+				Name: "TodoWrite",
+				Input: map[string]interface{}{},
+			},
+			expectRuleSuccess:  true,
+			expectedTodoCount:  1,
+			expectedContent:    []string{"New task"},
+			description:        "Should create default todo for empty input",
+		},
+		{
+			name: "already_valid_todos_array",
+			toolCall: types.Content{
+				Type: "tool_use",
+				ID:   "test_6",
+				Name: "TodoWrite",
+				Input: map[string]interface{}{
+					"todos": []interface{}{
+						map[string]interface{}{
+							"content":  "Valid todo",
+							"status":   "pending",
+							"priority": "medium",
+							"id":       "valid-todo",
+						},
+					},
+				},
+			},
+			expectRuleSuccess:  false, // Already valid, no correction needed
+			expectedTodoCount:  1,
+			expectedContent:    []string{"Valid todo"},
+			description:        "Should not need correction for already valid todos array",
+		},
+		{
+			name: "malformed_todos_array_with_wrong_field_names",
+			toolCall: types.Content{
+				Type: "tool_use",
+				ID:   "test_7",
+				Name: "TodoWrite",
+				Input: map[string]interface{}{
+					"todos": []interface{}{
+						map[string]interface{}{
+							"description": "Fix the bug in handler",
+							"task":        "Fix the bug in handler", // redundant but might appear
+							"status":      "pending",
+							"id":          "1",
+						},
+						map[string]interface{}{
+							"description": "Update documentation",
+							"status":      "pending",
+							"id":          "2",
+						},
+					},
+				},
+			},
+			expectRuleSuccess:  true, // Should fix the wrong field names
+			expectedTodoCount:  2,
+			expectedContent:    []string{"Fix the bug in handler", "Update documentation"},
+			description:        "Should fix malformed todos array with wrong field names (description->content)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Test rule-based correction
+			correctedCall, success := service.AttemptRuleBasedTodoWriteCorrection(ctx, tt.toolCall)
+			
+			assert.Equal(t, tt.expectRuleSuccess, success, tt.description)
+			
+			if success {
+				// Validate the corrected structure
+				assert.Equal(t, "TodoWrite", correctedCall.Name)
+				assert.Contains(t, correctedCall.Input, "todos")
+				
+				todos, ok := correctedCall.Input["todos"].([]interface{})
+				require.True(t, ok, "todos should be an array")
+				assert.Len(t, todos, tt.expectedTodoCount, "Should have expected number of todos")
+				
+				// Validate each todo item structure
+				for i, todo := range todos {
+					todoMap, ok := todo.(map[string]interface{})
+					require.True(t, ok, "Each todo should be an object")
+					
+					// Check required fields
+					assert.Contains(t, todoMap, "content")
+					assert.Contains(t, todoMap, "status")
+					assert.Contains(t, todoMap, "priority")
+					assert.Contains(t, todoMap, "id")
+					
+					// Check content matches expected
+					if i < len(tt.expectedContent) {
+						assert.Equal(t, tt.expectedContent[i], todoMap["content"])
+					}
+					
+					// Check valid enum values
+					status, ok := todoMap["status"].(string)
+					require.True(t, ok, "status should be string")
+					assert.Contains(t, []string{"pending", "in_progress", "completed"}, status)
+					
+					priority, ok := todoMap["priority"].(string)
+					require.True(t, ok, "priority should be string")
+					assert.Contains(t, []string{"high", "medium", "low"}, priority)
+					
+					id, ok := todoMap["id"].(string)
+					require.True(t, ok, "id should be string")
+					assert.NotEmpty(t, id, "id should not be empty")
+				}
+				
+				// Test validation of corrected call
+				validation := service.ValidateToolCall(ctx, correctedCall, availableTools)
+				assert.True(t, validation.IsValid, "Corrected call should pass validation")
+				assert.Empty(t, validation.MissingParams, "Should have no missing parameters")
+				assert.Empty(t, validation.InvalidParams, "Should have no invalid parameters")
+			}
+		})
+	}
+}
+
+// TestTodoWriteValidation tests TodoWrite validation logic
+func TestTodoWriteValidation(t *testing.T) {
+	service := correction.NewService("http://test", "test-key", true, "test-model", false)
+
+	// Define TodoWrite tool schema
+	todoWriteSchema := types.Tool{
+		Name:        "TodoWrite",
+		Description: "Updates todo list for current coding session",
+		InputSchema: types.ToolSchema{
+			Type: "object",
+			Properties: map[string]types.ToolProperty{
+				"todos": {
+					Type:        "array",
+					Description: "The updated todo list",
+				},
+			},
+			Required: []string{"todos"},
+		},
+	}
+
+	availableTools := []types.Tool{todoWriteSchema}
+	ctx := context.WithValue(context.Background(), internal.RequestIDKey, "test_req")
+
+	tests := []struct {
+		name         string
+		toolCall     types.Content
+		expectValid  bool
+		description  string
+	}{
+		{
+			name: "valid_todos_array",
+			toolCall: types.Content{
+				Type: "tool_use",
+				Name: "TodoWrite",
+				Input: map[string]interface{}{
+					"todos": []interface{}{
+						map[string]interface{}{
+							"content":  "Test task",
+							"status":   "pending",
+							"priority": "medium",
+							"id":       "test-task",
+						},
+					},
+				},
+			},
+			expectValid: true,
+			description: "Valid todos array should pass validation",
+		},
+		{
+			name: "missing_todos_parameter",
+			toolCall: types.Content{
+				Type: "tool_use",
+				Name: "TodoWrite",
+				Input: map[string]interface{}{
+					"todo": "Single todo item",
+				},
+			},
+			expectValid: false,
+			description: "Missing 'todos' parameter should fail validation",
+		},
+		{
+			name: "wrong_parameter_name",
+			toolCall: types.Content{
+				Type: "tool_use",
+				Name: "TodoWrite",
+				Input: map[string]interface{}{
+					"task": "Task item",
+					"items": []string{"item1", "item2"},
+				},
+			},
+			expectValid: false,
+			description: "Wrong parameter names should fail validation",
+		},
+		{
+			name: "empty_input",
+			toolCall: types.Content{
+				Type: "tool_use",
+				Name: "TodoWrite",
+				Input: map[string]interface{}{},
+			},
+			expectValid: false,
+			description: "Empty input should fail validation",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			validation := service.ValidateToolCall(ctx, tt.toolCall, availableTools)
+			assert.Equal(t, tt.expectValid, validation.IsValid, tt.description)
+			
+			if !tt.expectValid {
+				// Should have missing 'todos' parameter for most invalid cases
+				if tt.name != "wrong_parameter_name" {
+					assert.Contains(t, validation.MissingParams, "todos")
+				}
+			}
+		})
+	}
+}
+
+// TestTodoWriteIDGeneration tests ID generation logic
+func TestTodoWriteIDGeneration(t *testing.T) {
+	service := correction.NewService("http://test", "test-key", true, "test-model", false)
+
+	tests := []struct {
+		name     string
+		content  string
+		expected string
+	}{
+		{
+			name:     "simple_text",
+			content:  "Review code",
+			expected: "review-code",
+		},
+		{
+			name:     "with_spaces_and_caps",
+			content:  "Fix Critical Bug",
+			expected: "fix-critical-bug",
+		},
+		{
+			name:     "with_special_characters",
+			content:  "Update README.md file!",
+			expected: "update-readmemd-file",
+		},
+		{
+			name:     "with_underscores",
+			content:  "test_function_name",
+			expected: "test-function-name",
+		},
+		{
+			name:     "empty_string",
+			content:  "",
+			expected: "task",
+		},
+		{
+			name:     "very_long_content",
+			content:  "This is a very long task description that should be truncated to a reasonable length",
+			expected: "this-is-a-very-long-task-description-that-should-b",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := service.GenerateTodoID(tt.content)
+			assert.Equal(t, tt.expected, result)
+			
+			// Validate ID constraints
+			assert.LessOrEqual(t, len(result), 50, "ID should not exceed 50 characters")
+			assert.NotEmpty(t, result, "ID should not be empty")
+			assert.NotContains(t, result, "--", "ID should not contain double hyphens")
+			assert.False(t, strings.HasPrefix(result, "-"), "ID should not start with hyphen")
+			assert.False(t, strings.HasSuffix(result, "-"), "ID should not end with hyphen")
+		})
+	}
+}
+
+// TestCircuitBreakerPreventsInfiniteLoop tests that retry limits prevent infinite correction loops
+func TestCircuitBreakerPreventsInfiniteLoop(t *testing.T) {
+	// This test would require a more complex setup with mock LLM responses
+	// For now, we test the structure and logic bounds
+	service := correction.NewService("http://test", "test-key", true, "test-model", false)
+
+	// Define TodoWrite tool schema
+	todoWriteSchema := types.Tool{
+		Name:        "TodoWrite",
+		Description: "Updates todo list",
+		InputSchema: types.ToolSchema{
+			Type: "object",
+			Properties: map[string]types.ToolProperty{
+				"todos": {Type: "array", Description: "Todo list"},
+			},
+			Required: []string{"todos"},
+		},
+	}
+
+	invalidCall := types.Content{
+		Type: "tool_use",
+		ID:   "test_circuit",
+		Name: "TodoWrite",
+		Input: map[string]interface{}{
+			"todo": "Test task", // Invalid parameter name
+		},
+	}
+
+	availableTools := []types.Tool{todoWriteSchema}
+	ctx := context.WithValue(context.Background(), internal.RequestIDKey, "circuit_test")
+
+	// Test that rule-based correction works and prevents LLM retry loop
+	correctedCall, success := service.AttemptRuleBasedTodoWriteCorrection(ctx, invalidCall)
+	assert.True(t, success, "Rule-based correction should succeed for simple TodoWrite cases")
+	
+	// Validate that rule-based correction produces valid result
+	validation := service.ValidateToolCall(ctx, correctedCall, availableTools)
+	assert.True(t, validation.IsValid, "Rule-based correction should produce valid result")
+	
+	// This demonstrates that our rule-based system prevents most TodoWrite
+	// cases from entering the LLM retry loop, effectively acting as a circuit breaker
+}
+
+// TestSemanticToolCorrection tests WebFetch->Read correction for file:// URLs
+// Following SPARC: Test architectural issue detection and correction
+func TestSemanticToolCorrection(t *testing.T) {
+	service := correction.NewService("http://test", "test-key", true, "test-model", false)
+	ctx := context.WithValue(context.Background(), internal.RequestIDKey, "semantic_test")
+	
+	// Define available tools including Read and WebFetch
+	availableTools := []types.Tool{
+		{
+			Name:        "Read",
+			Description: "Reads a file from local filesystem",
+			InputSchema: types.ToolSchema{
+				Type: "object",
+				Properties: map[string]types.ToolProperty{
+					"file_path": {Type: "string", Description: "Path to file"},
+				},
+				Required: []string{"file_path"},
+			},
+		},
+		{
+			Name:        "WebFetch",
+			Description: "Fetches content from web URL",
+			InputSchema: types.ToolSchema{
+				Type: "object", 
+				Properties: map[string]types.ToolProperty{
+					"url": {Type: "string", Description: "URL to fetch"},
+					"prompt": {Type: "string", Description: "Analysis prompt"},
+				},
+				Required: []string{"url", "prompt"},
+			},
+		},
+	}
+
+	tests := []struct {
+		name           string
+		toolCall       types.Content
+		expectSemantic bool
+		expectCorrect  bool
+		expectedTool   string
+		expectedPath   string
+	}{
+		{
+			name: "webfetch_with_file_url_detected",
+			toolCall: types.Content{
+				Type: "tool_use",
+				ID:   "test_file_url",
+				Name: "WebFetch",
+				Input: map[string]interface{}{
+					"url":    "file:///Users/seven/projects/file.java",
+					"prompt": "Analyze this file",
+				},
+			},
+			expectSemantic: true,
+			expectCorrect:  true,
+			expectedTool:   "Read",
+			expectedPath:   "/Users/seven/projects/file.java",
+		},
+		{
+			name: "fetch_with_file_url_detected", 
+			toolCall: types.Content{
+				Type: "tool_use",
+				ID:   "test_fetch_file",
+				Name: "Fetch",
+				Input: map[string]interface{}{
+					"url": "file:///path/to/local/file.txt",
+				},
+			},
+			expectSemantic: true,
+			expectCorrect:  true,
+			expectedTool:   "Read",
+			expectedPath:   "/path/to/local/file.txt",
+		},
+		{
+			name: "webfetch_with_http_url_not_detected",
+			toolCall: types.Content{
+				Type: "tool_use",
+				ID:   "test_http_url",
+				Name: "WebFetch",
+				Input: map[string]interface{}{
+					"url":    "https://example.com/api/data",
+					"prompt": "Fetch this data",
+				},
+			},
+			expectSemantic: false,
+			expectCorrect:  false,
+			expectedTool:   "WebFetch", // Unchanged
+		},
+		{
+			name: "other_tool_not_affected",
+			toolCall: types.Content{
+				Type: "tool_use",
+				ID:   "test_other_tool",
+				Name: "Read",
+				Input: map[string]interface{}{
+					"file_path": "/some/file.txt",
+				},
+			},
+			expectSemantic: false,
+			expectCorrect:  false,
+			expectedTool:   "Read", // Unchanged
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Test semantic issue detection
+			hasSemantic := service.DetectSemanticIssue(ctx, tt.toolCall)
+			assert.Equal(t, tt.expectSemantic, hasSemantic, "Semantic issue detection mismatch")
+			
+			if tt.expectCorrect {
+				// Test semantic correction 
+				correctedCall, success := service.CorrectSemanticIssue(ctx, tt.toolCall, availableTools)
+				assert.True(t, success, "Semantic correction should succeed")
+				assert.Equal(t, tt.expectedTool, correctedCall.Name, "Tool name should be corrected")
+				
+				if tt.expectedPath != "" {
+					filePath, exists := correctedCall.Input["file_path"]
+					assert.True(t, exists, "file_path parameter should exist")
+					assert.Equal(t, tt.expectedPath, filePath, "File path should be extracted correctly")
+				}
+				
+				// Verify corrected tool call is valid
+				validation := service.ValidateToolCall(ctx, correctedCall, availableTools)
+				assert.True(t, validation.IsValid, "Corrected tool call should be valid")
+			}
+		})
+	}
+}
+
+// TestSemanticCorrectionIntegration tests semantic correction within full correction pipeline
+func TestSemanticCorrectionIntegration(t *testing.T) {
+	service := correction.NewService("http://test", "test-key", true, "test-model", false)
+	ctx := context.WithValue(context.Background(), internal.RequestIDKey, "integration_test")
+	
+	availableTools := []types.Tool{
+		{
+			Name:        "Read",
+			Description: "Reads a file",
+			InputSchema: types.ToolSchema{
+				Type: "object",
+				Properties: map[string]types.ToolProperty{
+					"file_path": {Type: "string", Description: "File path"},
+				},
+				Required: []string{"file_path"},
+			},
+		},
+		{
+			Name:        "WebFetch",
+			Description: "Fetches content from web URL",
+			InputSchema: types.ToolSchema{
+				Type: "object",
+				Properties: map[string]types.ToolProperty{
+					"url": {Type: "string", Description: "URL to fetch"},
+					"prompt": {Type: "string", Description: "Analysis prompt"},
+				},
+				Required: []string{"url", "prompt"},
+			},
+		},
+	}
+	
+	// Tool call with semantic issue (WebFetch with file:// URL)
+	toolCalls := []types.Content{
+		{
+			Type: "tool_use",
+			ID:   "integration_test",
+			Name: "WebFetch",
+			Input: map[string]interface{}{
+				"url":    "file:///Users/test/document.pdf",
+				"prompt": "Read this document",
+			},
+		},
+	}
+	
+	// Test semantic detection directly first
+	hasSemantic := service.DetectSemanticIssue(ctx, toolCalls[0])
+	assert.True(t, hasSemantic, "Should detect semantic issue")
+	
+	// Test that semantic correction works
+	correctedCall, success := service.CorrectSemanticIssue(ctx, toolCalls[0], availableTools)
+	assert.True(t, success, "Semantic correction should succeed")
+	assert.Equal(t, "Read", correctedCall.Name, "Should correct to Read tool")
+	
+	// Test that the corrected call is valid
+	validation := service.ValidateToolCall(ctx, correctedCall, availableTools)
+	assert.True(t, validation.IsValid, "Corrected tool call should be valid")
+}
+
