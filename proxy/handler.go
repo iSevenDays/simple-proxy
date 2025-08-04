@@ -17,13 +17,14 @@ import (
 
 // Handler handles HTTP proxy requests
 type Handler struct {
-	config            *config.Config
-	correctionService *correction.Service
-	loggerConfig      logger.LoggerConfig
+	config               *config.Config
+	correctionService    *correction.Service
+	loggerConfig         logger.LoggerConfig
+	conversationLogger   *logger.ConversationLogger
 }
 
 // NewHandler creates a new proxy handler
-func NewHandler(cfg *config.Config) *Handler {
+func NewHandler(cfg *config.Config, conversationLogger *logger.ConversationLogger) *Handler {
 	return &Handler{
 		config: cfg,
 		correctionService: correction.NewService(
@@ -33,7 +34,8 @@ func NewHandler(cfg *config.Config) *Handler {
 			cfg.CorrectionModel,
 			cfg.DisableToolCorrectionLogging,
 		),
-		loggerConfig: logger.NewConfigAdapter(cfg),
+		loggerConfig:       logger.NewConfigAdapter(cfg),
+		conversationLogger: conversationLogger,
 	}
 }
 
@@ -71,6 +73,11 @@ func (h *Handler) HandleAnthropicRequest(w http.ResponseWriter, r *http.Request)
 	
 	// Set up logger context - request ID already set by withRequestID above
 	loggerInstance := logger.New(ctx, h.loggerConfig)
+
+	// Log conversation if enabled
+	if h.conversationLogger != nil {
+		h.conversationLogger.LogRequest(ctx, requestID, anthropicReq)
+	}
 
 	originalModel := anthropicReq.Model
 
@@ -265,6 +272,11 @@ func (h *Handler) HandleAnthropicRequest(w http.ResponseWriter, r *http.Request)
 				loggerInstance.Info("🔧 Tool correction completed - no changes detected")
 			}
 			
+			// Log conversation correction if enabled
+			if h.conversationLogger != nil && changesDetected {
+				h.conversationLogger.LogCorrection(ctx, requestID, originalContent, correctedContent, "tool_correction")
+			}
+			
 			anthropicResp.Content = correctedContent
 		}
 	}
@@ -279,9 +291,19 @@ func (h *Handler) HandleAnthropicRequest(w http.ResponseWriter, r *http.Request)
 		} else if content.Type == "tool_use" {
 			toolCallCount++
 			logger.LogToolUsed(ctx, modelLogger, content.Name, content.ID)
+			
+			// Log conversation tool call if enabled
+			if h.conversationLogger != nil {
+				h.conversationLogger.LogToolCall(ctx, requestID, content.Name, content.Input, nil) // Result will be from next request
+			}
 		}
 	}
 	logger.LogResponseSummary(ctx, modelLogger, textItemCount, toolCallCount, anthropicResp.StopReason)
+
+	// Log conversation response if enabled
+	if h.conversationLogger != nil {
+		h.conversationLogger.LogResponse(ctx, requestID, anthropicResp)
+	}
 
 	// Send response
 	w.Header().Set("Content-Type", "application/json")

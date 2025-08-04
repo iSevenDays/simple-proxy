@@ -1,0 +1,6 @@
+# Ignore all log files to prevent committing sensitive conversation data
+*.log
+*.txt
+
+# Allow this gitignore file itself
+!.gitignore

@@ -2,6 +2,7 @@ package main
 
 import (
 	"claude-proxy/config"
+	"claude-proxy/logger"
 	"claude-proxy/proxy"
 	"fmt"
 	"log"
@@ -23,8 +24,20 @@ func main() {
 	log.Printf("🤖 CORRECTION_MODEL: %s → %s", cfg.CorrectionModel, cfg.ToolCorrectionEndpoint)
 	log.Printf("🌐 Listening on port: %s", cfg.Port)
 
+	// Initialize conversation logger if enabled
+	var conversationLogger *logger.ConversationLogger
+	if cfg.ConversationLoggingEnabled {
+		logLevel := logger.ParseLevel(cfg.ConversationLogLevel)
+		conversationLogger, err = logger.NewConversationLogger("logs", logLevel, cfg.ConversationMaskSensitive)
+		if err != nil {
+			log.Fatalf("❌ Failed to initialize conversation logger: %v", err)
+		}
+		log.Printf("💬 Conversation logging initialized: level=%s, session=%s", cfg.ConversationLogLevel, conversationLogger.GetSessionID())
+		defer conversationLogger.Close()
+	}
+
 	// Create proxy handler
-	proxyHandler := proxy.NewHandler(cfg)
+	proxyHandler := proxy.NewHandler(cfg, conversationLogger)
 
 	// Setup HTTP routes
 	http.HandleFunc("/", handleRoot)

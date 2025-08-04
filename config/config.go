@@ -36,6 +36,11 @@ type Config struct {
 	DisableSmallModelLogging     bool `json:"disable_small_model_logging"`    // Disable logging for small model (Haiku) requests
 	DisableToolCorrectionLogging bool `json:"disable_tool_correction_logging"` // Disable logging for tool correction operations
 
+	// Conversation logging settings
+	ConversationLoggingEnabled bool   `json:"conversation_logging_enabled"` // Enable full conversation logging
+	ConversationLogLevel       string `json:"conversation_log_level"`       // Log level for conversation logs (DEBUG, INFO, WARN, ERROR)
+	ConversationMaskSensitive  bool   `json:"conversation_mask_sensitive"`  // Mask sensitive data in conversation logs
+
 	// System message overrides (loaded from system_overrides.yaml)
 	SystemMessageOverrides SystemMessageOverrides `json:"system_message_overrides"`
 
@@ -66,6 +71,9 @@ func GetDefaultConfig() *Config {
 		PrintToolSchemas:             false, // Disabled by default
 		DisableSmallModelLogging:     false, // Enabled by default (normal logging)
 		DisableToolCorrectionLogging: false, // Enabled by default (normal logging)
+		ConversationLoggingEnabled:   false, // Disabled by default
+		ConversationLogLevel:         "INFO", // Default to INFO level
+		ConversationMaskSensitive:    true,  // Enable sensitive data masking by default
 		SystemMessageOverrides:       SystemMessageOverrides{}, // Empty by default
 		BigModel:               "",  // Will be set from .env
 		SmallModel:             "",  // Will be set from .env
@@ -96,6 +104,9 @@ func LoadConfigWithEnv() (*Config, error) {
 		ToolDescriptions:       make(map[string]string), // Empty by default
 		PrintSystemMessage:     false, // Disabled by default
 		PrintToolSchemas:       false, // Disabled by default
+		ConversationLoggingEnabled: false, // Disabled by default
+		ConversationLogLevel:       "INFO", // Default to INFO level
+		ConversationMaskSensitive:  true,  // Enable sensitive data masking by default
 		SystemMessageOverrides: SystemMessageOverrides{}, // Empty by default
 	}
 
@@ -244,6 +255,40 @@ func LoadConfigWithEnv() (*Config, error) {
 		} else {
 			cfg.HandleEmptyUserMessages = false
 			log.Printf("🔧 Configured HANDLE_EMPTY_USER_MESSAGES: disabled")
+		}
+	}
+
+	// Parse CONVERSATION_LOGGING_ENABLED (optional, defaults to false)
+	if conversationLogging, exists := envVars["CONVERSATION_LOGGING_ENABLED"]; exists {
+		if conversationLogging == "true" || conversationLogging == "1" {
+			cfg.ConversationLoggingEnabled = true
+			log.Printf("💬 Configured CONVERSATION_LOGGING_ENABLED: enabled")
+		} else {
+			cfg.ConversationLoggingEnabled = false
+			log.Printf("💬 Configured CONVERSATION_LOGGING_ENABLED: disabled")
+		}
+	}
+
+	// Parse CONVERSATION_LOG_LEVEL (optional, defaults to INFO)
+	if logLevel, exists := envVars["CONVERSATION_LOG_LEVEL"]; exists {
+		validLevels := map[string]bool{"DEBUG": true, "INFO": true, "WARN": true, "ERROR": true}
+		if validLevels[strings.ToUpper(logLevel)] {
+			cfg.ConversationLogLevel = strings.ToUpper(logLevel)
+			log.Printf("📊 Configured CONVERSATION_LOG_LEVEL: %s", cfg.ConversationLogLevel)
+		} else {
+			log.Printf("⚠️  Warning: Invalid CONVERSATION_LOG_LEVEL '%s', using default 'INFO'", logLevel)
+			cfg.ConversationLogLevel = "INFO"
+		}
+	}
+
+	// Parse CONVERSATION_MASK_SENSITIVE (optional, defaults to true)
+	if maskSensitive, exists := envVars["CONVERSATION_MASK_SENSITIVE"]; exists {
+		if maskSensitive == "false" || maskSensitive == "0" {
+			cfg.ConversationMaskSensitive = false
+			log.Printf("🔒 Configured CONVERSATION_MASK_SENSITIVE: disabled")
+		} else {
+			cfg.ConversationMaskSensitive = true
+			log.Printf("🔒 Configured CONVERSATION_MASK_SENSITIVE: enabled")
 		}
 	}
 

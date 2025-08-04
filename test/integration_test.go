@@ -80,7 +80,7 @@ func TestProxyIntegration(t *testing.T) {
 	cfg.BigModelEndpoint = mockServer.URL
 
 	// Create handler
-	handler := proxy.NewHandler(cfg)
+	handler := proxy.NewHandler(cfg, nil)
 
 	// Create test request (Anthropic format)
 	requestBody := map[string]interface{}{
@@ -197,7 +197,7 @@ func TestProxyToolCallIntegration(t *testing.T) {
 	defer mockServer.Close()
 
 	cfg.BigModelEndpoint = mockServer.URL
-	handler := proxy.NewHandler(cfg)
+	handler := proxy.NewHandler(cfg, nil)
 
 	// Request with tools
 	requestBody := map[string]interface{}{
@@ -333,7 +333,7 @@ func TestProxyErrorHandling(t *testing.T) {
 				cfg = config.GetDefaultConfig()
 			}
 			
-			handler := proxy.NewHandler(cfg)
+			handler := proxy.NewHandler(cfg, nil)
 			req := httptest.NewRequest("POST", "/v1/messages", bytes.NewBufferString(tt.requestBody))
 			req.Header.Set("Content-Type", "application/json")
 
@@ -352,7 +352,7 @@ func TestProxyErrorHandling(t *testing.T) {
 // TestMethodNotAllowed tests HTTP method validation
 func TestMethodNotAllowed(t *testing.T) {
 	cfg := config.GetDefaultConfig()
-	handler := proxy.NewHandler(cfg)
+	handler := proxy.NewHandler(cfg, nil)
 
 	req := httptest.NewRequest("GET", "/v1/messages", nil)
 	rr := httptest.NewRecorder()
