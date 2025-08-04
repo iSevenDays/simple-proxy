@@ -192,9 +192,9 @@ func TestSchemaRestoration(t *testing.T) {
 				},
 			},
 			availableTools: validTools,
-			expectRestore:  true,
+			expectRestore:  false,
 			expectedName:   "unknown_tool",
-			description:    "Unknown tools get fallback schema",
+			description:    "Unknown tools cannot be restored (no fallback schema)",
 		},
 		{
 			name: "valid_tool_not_modified",
@@ -282,7 +282,7 @@ func TestFindValidToolSchema(t *testing.T) {
 		{"WEBSEARCH_maps_to_WebSearch", "WEBSEARCH", "WebSearch", true},
 		{"read_file_maps_to_Read", "read_file", "Read", true},
 		{"READ_maps_to_Read", "READ", "Read", true},
-		{"unknown_tool_gets_fallback", "unknown", "unknown", true},
+		{"unknown_tool_gets_fallback", "unknown", "unknown", false},
 	}
 
 	for _, tt := range tests {

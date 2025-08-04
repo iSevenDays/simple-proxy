@@ -2,30 +2,16 @@ package proxy
 
 import (
 	"claude-proxy/config"
+	"claude-proxy/logger"
 	"claude-proxy/types"
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"strings"
 )
 
-// isSmallModel checks if the given model name maps to the small model configuration
-func isSmallModel(ctx context.Context, model string, cfg *config.Config) bool {
-	// Check if the model is Haiku or maps to small model
-	return model == "claude-3-5-haiku-20241022" || 
-		   cfg.MapModelName(ctx, model) == cfg.SmallModel ||
-		   model == cfg.SmallModel
-}
-
-// shouldLogForModel determines if logging should be enabled for the given model
-func shouldLogForModel(ctx context.Context, model string, cfg *config.Config) bool {
-	// If small model logging is disabled and this is a small model, don't log
-	if cfg.DisableSmallModelLogging && isSmallModel(ctx, model, cfg) {
-		return false
-	}
-	return true
-}
+// NOTE: isSmallModel and shouldLogForModel functions removed
+// This logic is now handled by the logger.ConfigAdapter
 
 // getEmptyToolResultMessage returns an appropriate message for empty tool results
 func getEmptyToolResultMessage(contentMap map[string]interface{}) string {
@@ -72,8 +58,74 @@ func getToolSpecificEmptyMessage(toolType string) string {
 	}
 }
 
+// FindValidToolSchema attempts to find a valid schema for a corrupted tool
+// by looking for a similar tool name in the available tools list, or providing a fallback schema
+func FindValidToolSchema(corruptedTool types.Tool, availableTools []types.Tool) *types.Tool {
+	// First, check common mapping patterns for known corrupted tools
+	nameMapping := map[string]string{
+		"web_search": "WebSearch",
+		"websearch":  "WebSearch", 
+		"read_file":  "Read",
+		"write_file": "Write",
+		"bash_command": "Bash",
+		"grep_search": "Grep",
+	}
+	
+	if mappedName, exists := nameMapping[strings.ToLower(corruptedTool.Name)]; exists {
+		for _, validTool := range availableTools {
+			if validTool.Name == mappedName && isValidToolSchema(validTool) {
+				return &validTool
+			}
+		}
+	}
+	
+	// Direct name match (case-insensitive) - only if it has a valid schema
+	for _, validTool := range availableTools {
+		if strings.EqualFold(corruptedTool.Name, validTool.Name) && isValidToolSchema(validTool) {
+			return &validTool
+		}
+	}
+	
+	// If no valid tool found in availableTools, provide a fallback schema for known tools
+	return types.GetFallbackToolSchema(corruptedTool.Name)
+}
+
+
+// isValidToolSchema checks if a tool has a valid schema
+func isValidToolSchema(tool types.Tool) bool {
+	return tool.InputSchema.Type != "" && tool.InputSchema.Properties != nil
+}
+
+// RestoreCorruptedToolSchema attempts to fix corrupted tool schemas
+func RestoreCorruptedToolSchema(tool *types.Tool, availableTools []types.Tool, logger logger.Logger) bool {
+	// Check if schema is actually corrupted
+	if tool.InputSchema.Type != "" && tool.InputSchema.Properties != nil {
+		return false // Not corrupted
+	}
+	
+	logger.Debug("🔍 Attempting to restore corrupted schema for tool: %s", tool.Name)
+	
+	// Try to find a valid schema for this tool (now includes fallback schemas)
+	validTool := FindValidToolSchema(*tool, availableTools)
+	if validTool != nil {
+		originalName := tool.Name
+		*tool = *validTool // Copy the entire valid tool definition
+		logger.Info("✅ Schema restored: %s → %s (with fallback schema)", 
+			originalName, tool.Name)
+		return true
+	}
+	
+	logger.Warn("⚠️ Could not restore schema for tool: %s (no valid schema found)", 
+		tool.Name)
+	return false
+}
+
 // TransformAnthropicToOpenAI converts Anthropic request format to OpenAI format
 func TransformAnthropicToOpenAI(ctx context.Context, req types.AnthropicRequest, cfg *config.Config) (types.OpenAIRequest, error) {
+	// Get logger from context
+	loggerConfig := logger.NewConfigAdapter(cfg)
+	loggerInstance := logger.FromContext(ctx, loggerConfig)
+	
 	openaiReq := types.OpenAIRequest{
 		Model:     req.Model,
 		MaxTokens: req.MaxTokens,
@@ -101,15 +153,12 @@ func TransformAnthropicToOpenAI(ctx context.Context, req types.AnthropicRequest,
 				originalContent := systemContent
 				systemContent = config.ApplySystemMessageOverrides(systemContent, cfg.SystemMessageOverrides)
 				
-				requestID := GetRequestID(ctx)
-				log.Printf("🔄 [%s] Applied system message overrides (original: %d chars, modified: %d chars)", 
-					requestID, len(originalContent), len(systemContent))
+				logger.LogSystemOverride(ctx, loggerInstance, len(originalContent), len(systemContent))
 			}
 			
 			// Print system message if enabled
 			if cfg.PrintSystemMessage {
-				requestID := GetRequestID(ctx)
-				log.Printf("📋 [%s] System message (%d chars):\n%s", requestID, len(systemContent), systemContent)
+				logger.LogSystemMessage(ctx, loggerInstance, len(systemContent), systemContent)
 			}
 			
 			openaiReq.Messages = append(openaiReq.Messages, types.OpenAIMessage{
@@ -120,7 +169,6 @@ func TransformAnthropicToOpenAI(ctx context.Context, req types.AnthropicRequest,
 	}
 
 	// Transform messages
-	requestID := GetRequestID(ctx)
 	for i, msg := range req.Messages {
 		openaiMsg := types.OpenAIMessage{
 			Role: msg.Role,
@@ -154,32 +202,29 @@ func TransformAnthropicToOpenAI(ctx context.Context, req types.AnthropicRequest,
 			}
 			
 			if !hasText && !hasToolUse {
-				log.Printf("⚠️[%s] Assistant message %d has no text or tool_use content (%d content items)", 
-					requestID, i, contentCount)
+				loggerInstance.Warn("⚠️ Assistant message %d has no text or tool_use content (%d content items)", 
+					i, contentCount)
 				// Log the actual content structure for debugging
 				if contentBytes, err := json.Marshal(msg.Content); err == nil {
-					log.Printf("⚠️[%s] Assistant message %d content: %s", requestID, i, string(contentBytes))
+					loggerInstance.Warn("⚠️ Assistant message %d content: %s", i, string(contentBytes))
 				}
 			}
 		}
 
 		// Log user messages to track what they requested
 		if msg.Role == "user" {
+			modelLogger := loggerInstance.WithModel(req.Model)
 			switch content := msg.Content.(type) {
 			case string:
 				contentLength := len(content)
-				if shouldLogForModel(ctx, req.Model, cfg) {
-					log.Printf("👤 [%s] User request: %d", requestID, contentLength)
-				}
+				logger.LogUserRequest(ctx, modelLogger, contentLength)
 			case []interface{}:
 				for _, item := range content {
 					if contentMap, ok := item.(map[string]interface{}); ok {
 						if contentType, _ := contentMap["type"].(string); contentType == "text" {
 							if text, ok := contentMap["text"].(string); ok {
 								textLength := len(text)
-								if shouldLogForModel(ctx, req.Model, cfg) {
-									log.Printf("👤 [%s] User request (inner): %d", requestID, textLength)
-								}
+								modelLogger.Debug("👤 User request (inner): %d", textLength)
 							}
 						}
 					}
@@ -229,14 +274,14 @@ func TransformAnthropicToOpenAI(ctx context.Context, req types.AnthropicRequest,
 							if cfg.HandleEmptyToolResults && strings.TrimSpace(text) == "" {
 								// Determine tool-specific error message based on tool_use_id or content
 								openaiMsg.Content = getEmptyToolResultMessage(contentMap)
-								log.Printf("🔧[%s] Empty tool result replaced with placeholder message", requestID)
+								logger.LogEmptyToolResult(ctx, loggerInstance, openaiMsg.Content)
 							} else {
 								openaiMsg.Content = text
 							}
 						} else if cfg.HandleEmptyToolResults {
 							// No content field - provide default message
 							openaiMsg.Content = "Tool execution completed with no output"
-							log.Printf("🔧[%s] Missing tool result content replaced with default message", requestID)
+							logger.LogMissingToolContent(ctx, loggerInstance)
 						}
 						if toolUseID, ok := contentMap["tool_use_id"].(string); ok {
 							openaiMsg.ToolCallID = toolUseID
@@ -256,8 +301,7 @@ func TransformAnthropicToOpenAI(ctx context.Context, req types.AnthropicRequest,
 			}
 		default:
 			// Fallback for unexpected format
-			requestID := GetRequestID(ctx)
-			log.Printf("⚠️ [%s] Unexpected content format: %T", requestID, content)
+			loggerInstance.Warn("⚠️ Unexpected content format: %T", content)
 		}
 
 		// Note: llama.cpp workarounds removed (as of llama.cpp latest release)
@@ -267,19 +311,75 @@ func TransformAnthropicToOpenAI(ctx context.Context, req types.AnthropicRequest,
 		// - No more infinite hangs on empty content (returns immediate 400 error)
 		// - Requires updated llama.cpp server version with OpenAI API compliance fixes
 
-		// Validate message before adding to request
+		// Handle empty messages based on configuration
 		if openaiMsg.Content == "" && len(openaiMsg.ToolCalls) == 0 {
-			log.Printf("⚠️[%s] Potentially invalid message: role=%s, empty content and no tool_calls (from Anthropic message %d)", 
-				requestID, openaiMsg.Role, i)
+			shouldAddContent := false
+			var defaultContent string
+			
+			switch openaiMsg.Role {
+			case "tool":
+				if cfg.HandleEmptyToolResults {
+					shouldAddContent = true
+					defaultContent = "Tool execution completed with no output"
+				}
+			case "user":
+				if cfg.HandleEmptyUserMessages {
+					shouldAddContent = true
+					defaultContent = "[Empty user message]"
+				}
+			case "assistant":
+				// Assistant messages with no content and no tool calls are typically invalid
+				// Let provider handle validation (will return proper error)
+				loggerInstance.Warn("⚠️ Empty assistant message (letting provider validate)")
+			}
+			
+			if shouldAddContent {
+				openaiMsg.Content = defaultContent
+				logger.LogDefaultContent(ctx, loggerInstance, openaiMsg.Role)
+			} else if openaiMsg.Content == "" && len(openaiMsg.ToolCalls) == 0 {
+				// Log but don't modify - let provider handle validation
+				loggerInstance.Warn("⚠️ Empty message: role=%s (letting provider validate)", 
+					openaiMsg.Role)
+			}
 		}
 
 		openaiReq.Messages = append(openaiReq.Messages, openaiMsg)
 	}
 
+	// Debug logging: print all messages being sent
+	modelLogger := loggerInstance.WithModel(req.Model)
+	modelLogger.Debug("🔍 Final message list (%d messages):", len(openaiReq.Messages))
+	for i, msg := range openaiReq.Messages {
+		contentPreview := msg.Content
+		// Show full content for validation errors, otherwise truncate at 100 chars
+		if len(contentPreview) > 100 && !strings.Contains(contentPreview, "InputValidationError") {
+			contentPreview = contentPreview[:100] + "..."
+		}
+		
+		// Build message info
+		msgInfo := fmt.Sprintf("🔍   Message %d: role=%s", i, msg.Role)
+		
+		// Add content_len if there's content
+		if len(msg.Content) > 0 {
+			msgInfo += fmt.Sprintf(", content_len=%d", len(msg.Content))
+		}
+		
+		// Add tool_calls if there are any
+		if len(msg.ToolCalls) > 0 {
+			msgInfo += fmt.Sprintf(", tool_calls=%d", len(msg.ToolCalls))
+		}
+		
+		// Add tool_call_id if present
+		if msg.ToolCallID != "" {
+			msgInfo += fmt.Sprintf(", tool_call_id=%s", msg.ToolCallID)
+		}
+		
+		modelLogger.Debug(msgInfo)
+		modelLogger.Debug("🔍     Content preview: %q", contentPreview)
+	}
+
 	// Transform tools
 	if len(req.Tools) > 0 {
-		requestID := GetRequestID(ctx)
-		
 		// Filter tools based on skip list
 		var filteredTools []types.Tool
 		var skippedTools []string
@@ -300,13 +400,34 @@ func TransformAnthropicToOpenAI(ctx context.Context, req types.AnthropicRequest,
 		
 		// Log skipped tools if any
 		if len(skippedTools) > 0 {
-			log.Printf("🚫 [%s] Skipped %d tools: %v", requestID, len(skippedTools), skippedTools)
+			logger.LogToolsSkipped(ctx, loggerInstance, len(skippedTools), skippedTools)
+		}
+		
+		// Print tool schemas if enabled (before transformation to see original Claude Code schemas)
+		if cfg.PrintToolSchemas && len(filteredTools) > 0 {
+			logger.LogToolSchemas(ctx, loggerInstance, filteredTools)
 		}
 		
 		// Transform filtered tools
 		if len(filteredTools) > 0 {
 			openaiReq.Tools = make([]types.OpenAITool, len(filteredTools))
 			for i, tool := range filteredTools {
+				// Attempt to restore corrupted tool schemas before processing
+				if tool.InputSchema.Type == "" || tool.InputSchema.Properties == nil {
+					loggerInstance.Warn("⚠️ Malformed tool schema detected for %s, attempting restoration", tool.Name)
+					
+					// Try to restore the schema by finding a valid tool in the original request
+					if RestoreCorruptedToolSchema(&tool, req.Tools, loggerInstance) {
+						// Schema was restored, continue with processing
+						filteredTools[i] = tool // Update the tool in the slice
+					} else {
+						// Could not restore, log the corruption details
+						loggerInstance.Error("❌ Schema restoration failed for %s: type=%q, properties=%v, required=%v", 
+							tool.Name, tool.InputSchema.Type, tool.InputSchema.Properties, tool.InputSchema.Required)
+						loggerInstance.Debug("🔍 Original corrupted tool: %+v", tool)
+					}
+				}
+				
 				// Use YAML override description if available, otherwise use original
 				description := cfg.GetToolDescription(tool.Name, tool.Description)
 				
@@ -318,28 +439,24 @@ func TransformAnthropicToOpenAI(ctx context.Context, req types.AnthropicRequest,
 						Parameters:  tool.InputSchema,
 					},
 				}
-			}
-
-			if shouldLogForModel(ctx, req.Model, cfg) {
-				log.Printf("🔧 [%s] Transformed %d tools to OpenAI format (filtered from %d)", requestID, len(openaiReq.Tools), len(req.Tools))
-			}
-			// Log first few tool names for debugging
-			if shouldLogForModel(ctx, req.Model, cfg) {
-				if len(openaiReq.Tools) <= 5 {
-					toolNames := make([]string, len(openaiReq.Tools))
-					for i, tool := range openaiReq.Tools {
-						toolNames[i] = tool.Function.Name
-					}
-					log.Printf("     [%s] Tools: [%s]", requestID, strings.Join(toolNames, ", "))
-				} else {
-					log.Printf("     [%s] Tools: [%s, %s, ... and %d more]", requestID,
-						openaiReq.Tools[0].Function.Name,
-						openaiReq.Tools[1].Function.Name,
-						len(openaiReq.Tools)-2)
+				
+				// Verify transformation preserved schema correctly
+				if openaiReq.Tools[i].Function.Parameters.Type == "" && tool.InputSchema.Type != "" {
+					loggerInstance.Error("❌ Schema corruption during assignment for %s: input_type=%q → output_type=%q", 
+						tool.Name, tool.InputSchema.Type, openaiReq.Tools[i].Function.Parameters.Type)
 				}
 			}
+
+			logger.LogToolsTransformed(ctx, modelLogger, len(openaiReq.Tools), len(req.Tools))
+			
+			// Log first few tool names for debugging
+			toolNames := make([]string, len(openaiReq.Tools))
+			for i, tool := range openaiReq.Tools {
+				toolNames[i] = tool.Function.Name
+			}
+			logger.LogToolNames(ctx, modelLogger, toolNames)
 		} else {
-			log.Printf("🚫 [%s] All %d tools were skipped", requestID, len(req.Tools))
+			loggerInstance.Info("🚫 All %d tools were skipped", len(req.Tools))
 		}
 	}
 
@@ -347,10 +464,13 @@ func TransformAnthropicToOpenAI(ctx context.Context, req types.AnthropicRequest,
 }
 
 // TransformOpenAIToAnthropic converts OpenAI response format to Anthropic format
-func TransformOpenAIToAnthropic(ctx context.Context, resp *types.OpenAIResponse, model string) (*types.AnthropicResponse, error) {
-	requestID := GetRequestID(ctx)
+func TransformOpenAIToAnthropic(ctx context.Context, resp *types.OpenAIResponse, model string, cfg *config.Config) (*types.AnthropicResponse, error) {
+	// Set up logger for this function
+	loggerConfig := logger.NewConfigAdapter(cfg)
+	loggerInstance := logger.FromContext(ctx, loggerConfig)
+	
 	if len(resp.Choices) == 0 {
-		return nil, fmt.Errorf("[%s] no choices in OpenAI response", requestID)
+		return nil, fmt.Errorf("no choices in OpenAI response")
 	}
 
 	choice := resp.Choices[0]
@@ -371,7 +491,7 @@ func TransformOpenAIToAnthropic(ctx context.Context, resp *types.OpenAIResponse,
 		// Parse arguments back to map
 		var args map[string]interface{}
 		if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &args); err != nil {
-			log.Printf("⚠️[%s] Failed to parse tool arguments: %v", requestID, err)
+			loggerInstance.Warn("⚠️ Failed to parse tool arguments: %v", err)
 			args = make(map[string]interface{})
 		}
 
@@ -383,8 +503,8 @@ func TransformOpenAIToAnthropic(ctx context.Context, resp *types.OpenAIResponse,
 		}
 		content = append(content, toolContent)
 
-		log.Printf("🔧 [%s] Tool call detected in OpenAI response: %s(id=%s) with args: %v",
-			requestID, toolCall.Function.Name, toolCall.ID, args)
+		loggerInstance.Debug("🔧 Tool call detected in OpenAI response: %s(id=%s) with args: %v",
+			toolCall.Function.Name, toolCall.ID, args)
 	}
 
 	// Determine stop reason
@@ -415,10 +535,9 @@ func TransformOpenAIToAnthropic(ctx context.Context, resp *types.OpenAIResponse,
 		},
 	}
 
-	// Note: This function doesn't have access to config, so we can't conditionally log here
-	// The conditional logging is handled in the handler.go for response summary
-	log.Printf("✅ [%s] Transformed response: %d content items, stop_reason: %s",
-		requestID, len(content), stopReason)
+	// Log response transformation summary
+	loggerInstance.Debug("✅ Transformed response: %d content items, stop_reason: %s",
+		len(content), stopReason)
 
 	return anthropicResp, nil
 }

@@ -20,8 +20,9 @@ type Config struct {
 	// Tool correction settings
 	ToolCorrectionEnabled bool `json:"tool_correction_enabled"`
 
-	// Empty tool result handling
-	HandleEmptyToolResults bool `json:"handle_empty_tool_results"` // Replace empty tool results with descriptive messages
+	// Empty message handling
+	HandleEmptyToolResults  bool `json:"handle_empty_tool_results"`  // Replace empty tool results with descriptive messages
+	HandleEmptyUserMessages bool `json:"handle_empty_user_messages"` // Replace empty user messages with placeholder content
 
 	// Tool filtering settings
 	SkipTools []string `json:"skip_tools"` // Tools to skip/filter out from requests
@@ -31,6 +32,7 @@ type Config struct {
 
 	// Debug settings
 	PrintSystemMessage           bool `json:"print_system_message"`           // Print system messages to logs
+	PrintToolSchemas             bool `json:"print_tool_schemas"`             // Print tool schemas from Claude Code for debugging
 	DisableSmallModelLogging     bool `json:"disable_small_model_logging"`    // Disable logging for small model (Haiku) requests
 	DisableToolCorrectionLogging bool `json:"disable_tool_correction_logging"` // Disable logging for tool correction operations
 
@@ -61,6 +63,7 @@ func GetDefaultConfig() *Config {
 		SkipTools:             []string{}, // Empty array by default
 		ToolDescriptions:      make(map[string]string), // Empty map by default
 		PrintSystemMessage:           false, // Disabled by default
+		PrintToolSchemas:             false, // Disabled by default
 		DisableSmallModelLogging:     false, // Enabled by default (normal logging)
 		DisableToolCorrectionLogging: false, // Enabled by default (normal logging)
 		SystemMessageOverrides:       SystemMessageOverrides{}, // Empty by default
@@ -92,6 +95,7 @@ func LoadConfigWithEnv() (*Config, error) {
 		SkipTools:              []string{}, // Empty by default
 		ToolDescriptions:       make(map[string]string), // Empty by default
 		PrintSystemMessage:     false, // Disabled by default
+		PrintToolSchemas:       false, // Disabled by default
 		SystemMessageOverrides: SystemMessageOverrides{}, // Empty by default
 	}
 
@@ -188,6 +192,17 @@ func LoadConfigWithEnv() (*Config, error) {
 		}
 	}
 
+	// Parse PRINT_TOOL_SCHEMAS (optional, defaults to false)
+	if printToolSchemas, exists := envVars["PRINT_TOOL_SCHEMAS"]; exists {
+		if printToolSchemas == "true" || printToolSchemas == "1" {
+			cfg.PrintToolSchemas = true
+			log.Printf("🔧 Configured PRINT_TOOL_SCHEMAS: enabled")
+		} else {
+			cfg.PrintToolSchemas = false
+			log.Printf("🔧 Configured PRINT_TOOL_SCHEMAS: disabled")
+		}
+	}
+
 	// Parse DISABLE_SMALL_MODEL_LOGGING (optional, defaults to false)
 	if disableSmallLogging, exists := envVars["DISABLE_SMALL_MODEL_LOGGING"]; exists {
 		if disableSmallLogging == "true" || disableSmallLogging == "1" {
@@ -218,6 +233,17 @@ func LoadConfigWithEnv() (*Config, error) {
 		} else {
 			cfg.HandleEmptyToolResults = true
 			log.Printf("🔧 Configured HANDLE_EMPTY_TOOL_RESULTS: enabled")
+		}
+	}
+
+	// Parse HANDLE_EMPTY_USER_MESSAGES (optional, defaults to false)
+	if handleEmptyUser, exists := envVars["HANDLE_EMPTY_USER_MESSAGES"]; exists {
+		if handleEmptyUser == "true" || handleEmptyUser == "1" {
+			cfg.HandleEmptyUserMessages = true
+			log.Printf("🔧 Configured HANDLE_EMPTY_USER_MESSAGES: enabled")
+		} else {
+			cfg.HandleEmptyUserMessages = false
+			log.Printf("🔧 Configured HANDLE_EMPTY_USER_MESSAGES: disabled")
 		}
 	}
 
@@ -301,7 +327,10 @@ func (c *Config) MapModelName(ctx context.Context, claudeModel string) string {
 	}
 
 	if mapped, exists := modelMap[claudeModel]; exists {
-		log.Printf("🔄[%s] Model mapping: %s → %s", requestID, claudeModel, mapped)
+		// Only log model mapping if it's not a small model (to avoid spam from disabled small model logging)
+		if !c.DisableSmallModelLogging || mapped != c.SmallModel {
+			log.Printf("🔄[%s] Model mapping: %s → %s", requestID, claudeModel, mapped)
+		}
 		return mapped
 	}
 

@@ -8,6 +8,7 @@ import (
 	"testing"
 )
 
+
 func TestStreamingToolCallReconstruction_PartialChunks(t *testing.T) {
 	// Test the exact scenario from the logs:
 	// - Multiple chunks with partial tool call data
@@ -119,5 +120,3 @@ func TestStreamingToolCallReconstruction_PartialChunks(t *testing.T) {
 		t.Errorf("Expected arguments '%s', got '%s'", expectedArgs, toolCall.Function.Arguments)
 	}
 }
-
-// stringPtr helper function (reusing from other test files)

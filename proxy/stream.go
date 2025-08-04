@@ -105,30 +105,30 @@ func ReconstructResponseFromChunks(ctx context.Context, chunks []types.OpenAIStr
 			contentParts = append(contentParts, delta.Content)
 		}
 
-		// Accumulate tool calls
+		// Accumulate tool calls by index (streaming chunks can have partial data)
 		for _, toolCall := range delta.ToolCalls {
-			// Find or create tool call entry
-			found := false
-			for i := range toolCalls {
-				if toolCalls[i].ID == toolCall.ID {
-					// Append to existing arguments
-					toolCalls[i].Function.Arguments += toolCall.Function.Arguments
-					found = true
-					break
-				}
-			}
-
-			if !found {
-				// New tool call
+			index := toolCall.Index
+			
+			// Ensure we have enough tool calls for this index
+			for len(toolCalls) <= index {
 				toolCalls = append(toolCalls, types.OpenAIToolCall{
-					ID:   toolCall.ID,
-					Type: toolCall.Type,
-					Function: types.OpenAIToolCallFunction{
-						Name:      toolCall.Function.Name,
-						Arguments: toolCall.Function.Arguments,
-					},
+					Type: "function",
+					Function: types.OpenAIToolCallFunction{},
 				})
 			}
+			
+			// Accumulate fields for this tool call index
+			if toolCall.ID != "" {
+				toolCalls[index].ID = toolCall.ID
+			}
+			if toolCall.Type != "" {
+				toolCalls[index].Type = toolCall.Type
+			}
+			if toolCall.Function.Name != "" {
+				toolCalls[index].Function.Name = toolCall.Function.Name
+			}
+			// Always accumulate arguments (can be spread across multiple chunks)
+			toolCalls[index].Function.Arguments += toolCall.Function.Arguments
 		}
 	}
 

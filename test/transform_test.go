@@ -405,7 +405,7 @@ func TestOpenAIToAnthropicTransform(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := internal.WithRequestID(context.Background(), "openai_transform_test")
-			result, err := proxy.TransformOpenAIToAnthropic(ctx, &tt.input, tt.model)
+			result, err := proxy.TransformOpenAIToAnthropic(ctx, &tt.input, tt.model, getTestConfig())
 			require.NoError(t, err)
 
 			assert.Equal(t, tt.expected.ID, result.ID)
@@ -620,9 +620,6 @@ func TestNullStringServerError(t *testing.T) {
 }
 
 // Helper function to create string pointers
-func stringPtr(s string) *string {
-	return &s
-}
 
 // TestPrintSystemMessageInTransform tests that system messages are printed when enabled
 func TestPrintSystemMessageInTransform(t *testing.T) {

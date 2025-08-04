@@ -221,7 +221,31 @@ func (s *Service) CorrectToolCalls(ctx context.Context, toolCalls []types.Conten
 			continue
 		}
 
-		// Stage 1.5: Try rule-based TodoWrite correction before LLM
+		// Stage 1.5: Try rule-based parameter corrections before LLM
+		if ruleBasedCall, success := s.AttemptRuleBasedParameterCorrection(ctx, currentCall); success {
+			if s.shouldLog() {
+				log.Printf("🔧[%s] Rule-based parameter correction successful", requestID)
+			}
+			
+			// Re-validate rule-based correction
+			ruleValidation := s.ValidateToolCall(ctx, ruleBasedCall, availableTools)
+			if ruleValidation.IsValid {
+				if s.shouldLog() {
+					log.Printf("✅[%s] Rule-based parameter correction passed validation", requestID)
+				}
+				correctedCalls = append(correctedCalls, ruleBasedCall)
+				break // Exit retry loop - success
+			} else {
+				if s.shouldLog() {
+					log.Printf("⚠️[%s] Rule-based correction failed validation, continuing with LLM", requestID)
+				}
+				// Update currentCall to the rule-based attempt for potential LLM correction
+				currentCall = ruleBasedCall
+				validation = ruleValidation
+			}
+		}
+
+		// Stage 1.6: Try rule-based TodoWrite correction before LLM
 		if currentCall.Name == "TodoWrite" {
 			if ruleBasedCall, success := s.AttemptRuleBasedTodoWriteCorrection(ctx, currentCall); success {
 				if s.shouldLog() {
@@ -475,10 +499,18 @@ func (s *Service) ValidateToolCall(ctx context.Context, call types.Content, avai
 				return s.correctSlashCommandToTask(ctx, call, availableTools)
 			}
 			
-			if s.shouldLog() {
-				log.Printf("❌[%s] Unknown tool: %s", requestID, call.Name)
+			// Try fallback schema for Claude Code built-in tools
+			if fallbackTool := types.GetFallbackToolSchema(call.Name); fallbackTool != nil {
+				tool = fallbackTool
+				if s.shouldLog() {
+					log.Printf("🔧[%s] Using fallback schema for Claude Code tool: %s", requestID, call.Name)
+				}
+			} else {
+				if s.shouldLog() {
+					log.Printf("❌[%s] Unknown tool: %s", requestID, call.Name)
+				}
+				return result
 			}
-			return result
 		}
 	}
 
@@ -1455,6 +1487,82 @@ func (s *Service) HasStructuralMismatch(call types.Content, availableTools []typ
 	// For other tools, we could add generic structural checks here
 	// For now, no structural validation for other tools
 	return false
+}
+
+// AttemptRuleBasedParameterCorrection tries to fix common parameter name issues instantly
+// without LLM calls for better performance. This handles the most common correction patterns.
+func (s *Service) AttemptRuleBasedParameterCorrection(ctx context.Context, call types.Content) (types.Content, bool) {
+	requestID := getRequestID(ctx)
+	
+	if call.Type != "tool_use" {
+		return call, false
+	}
+
+	// Tool-specific parameter mappings based on frequent correction patterns
+	// These are extracted from the actual LLM correction prompt patterns
+	toolSpecificMappings := map[string]map[string]string{
+		// File operations: path-related parameters become file_path
+		"Read":  {"filename": "file_path", "path": "file_path"},
+		"Write": {"filename": "file_path", "path": "file_path", "text": "content"},
+		"Edit":  {"filename": "file_path", "path": "file_path"},
+		
+		// Search operations: query/search -> pattern, filter -> glob
+		"Grep": {"search": "pattern", "query": "pattern", "filter": "glob"},
+		"Glob": {"search": "pattern", "query": "pattern"},
+		
+		// WebSearch: Don't change query (it's correct for WebSearch)
+		// Other tools: Add as needed
+	}
+	
+	// Get mappings for this specific tool
+	mappings, exists := toolSpecificMappings[call.Name]
+	if !exists {
+		// No specific mappings for this tool, return unchanged
+		return call, false
+	}
+
+	// Create a copy of the input to avoid modifying the original
+	correctedInput := make(map[string]interface{})
+	for key, value := range call.Input {
+		correctedInput[key] = value
+	}
+	
+	// Apply parameter mappings for this specific tool
+	changed := false
+	for oldParam, newParam := range mappings {
+		if value, exists := correctedInput[oldParam]; exists {
+			// Only apply mapping if the new parameter doesn't already exist
+			if _, hasNew := correctedInput[newParam]; !hasNew {
+				delete(correctedInput, oldParam)
+				correctedInput[newParam] = value
+				changed = true
+				
+				if s.shouldLog() {
+					log.Printf("🔧[%s] Rule-based parameter correction: %s.%s -> %s.%s", 
+						requestID, call.Name, oldParam, call.Name, newParam)
+				}
+			}
+		}
+	}
+
+	if !changed {
+		return call, false
+	}
+
+	// Create corrected call
+	correctedCall := types.Content{
+		Type:  call.Type,
+		ID:    call.ID,
+		Name:  call.Name,
+		Input: correctedInput,
+	}
+
+	if s.shouldLog() {
+		log.Printf("✅[%s] Rule-based correction successful for %s: %d parameter(s) fixed", 
+			requestID, call.Name, len(mappings))
+	}
+
+	return correctedCall, true
 }
 
 // checkTodoWriteStructure validates TodoWrite internal structure
