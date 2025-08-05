@@ -5,6 +5,7 @@ import (
 	"claude-proxy/config"
 	"claude-proxy/correction"
 	"claude-proxy/logger"
+	"claude-proxy/loop"
 	"claude-proxy/types"
 	"context"
 	"encoding/json"
@@ -21,6 +22,7 @@ type Handler struct {
 	correctionService    *correction.Service
 	loggerConfig         logger.LoggerConfig
 	conversationLogger   *logger.ConversationLogger
+	loopDetector         *loop.LoopDetector
 }
 
 // NewHandler creates a new proxy handler
@@ -36,6 +38,7 @@ func NewHandler(cfg *config.Config, conversationLogger *logger.ConversationLogge
 		),
 		loggerConfig:       logger.NewConfigAdapter(cfg),
 		conversationLogger: conversationLogger,
+		loopDetector:       loop.NewLoopDetector(),
 	}
 }
 
@@ -108,6 +111,28 @@ func (h *Handler) HandleAnthropicRequest(w http.ResponseWriter, r *http.Request)
 		loggerInstance.Error("❌ Failed to transform request: %v", err)
 		http.Error(w, "Request transformation failed", http.StatusInternalServerError)
 		return
+	}
+
+	// Check for loop patterns in the conversation
+	if h.loopDetector != nil {
+		detection := h.loopDetector.DetectLoop(ctx, openaiReq.Messages)
+		if detection.HasLoop {
+			loggerInstance.Warn("🔄 Loop detected: %s (tool: %s, count: %d)", detection.LoopType, detection.ToolName, detection.Count)
+			loggerInstance.Info("🔄 Breaking loop with recommendation: %s", detection.Recommendation)
+			
+			// Log conversation loop if enabled
+			if h.conversationLogger != nil {
+				h.conversationLogger.LogCorrection(ctx, requestID, nil, nil, fmt.Sprintf("loop_detection_%s_%s_%d", detection.LoopType, detection.ToolName, detection.Count))
+			}
+			
+			// Return loop-breaking response immediately
+			loopBreakResponse := h.loopDetector.CreateLoopBreakingResponse(detection)
+			w.Header().Set("Content-Type", "application/json")
+			if err := json.NewEncoder(w).Encode(loopBreakResponse); err != nil {
+				loggerInstance.Error("❌ Failed to encode loop-breaking response: %v", err)
+			}
+			return
+		}
 	}
 
 	// Apply smart tool choice detection if enabled and tools are available
