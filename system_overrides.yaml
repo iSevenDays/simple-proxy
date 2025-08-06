@@ -9,14 +9,14 @@ systemMessageOverrides:
 
   # Replace specific text
   replacements:
-    - find: "Claude Code"
+    - find: "xxxClaude Codexxxx"
       replace: "AI Assistant"
-    - find: "Anthropic's official CLI"
+    - find: "xxxAnthropic's official CLIxxx"
       replace: "AI CLI Assistant"
 
   # Prepend/append custom content
-  prepend: |
-    You are an expert coding assistant with access to powerful tools.
+#  prepend: |
+#    You are an expert coding assistant with access to powerful tools.
 
-  append: |
-    Always prioritize code quality and best practices.
+#  append: |
+#    Always prioritize code quality and best practices.
