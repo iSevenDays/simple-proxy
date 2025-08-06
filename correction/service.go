@@ -43,9 +43,10 @@ type Service struct {
 	enabled       bool
 	modelName     string // Configurable model for corrections
 	disableLogging bool   // Disable tool correction logging
+	validator     types.ToolValidator // Injected tool validator
 }
 
-// NewService creates a new tool correction service
+// NewService creates a new tool correction service with default StandardToolValidator
 func NewService(endpoint, apiKey string, enabled bool, modelName string, disableLogging bool) *Service {
 	return &Service{
 		endpoint:       endpoint,
@@ -53,6 +54,19 @@ func NewService(endpoint, apiKey string, enabled bool, modelName string, disable
 		enabled:        enabled,
 		modelName:      modelName,
 		disableLogging: disableLogging,
+		validator:      types.NewStandardToolValidator(), // Default validator for backward compatibility
+	}
+}
+
+// NewServiceWithValidator creates a new tool correction service with custom validator
+func NewServiceWithValidator(endpoint, apiKey string, enabled bool, modelName string, disableLogging bool, validator types.ToolValidator) *Service {
+	return &Service{
+		endpoint:       endpoint,
+		apiKey:         apiKey,
+		enabled:        enabled,
+		modelName:      modelName,
+		disableLogging: disableLogging,
+		validator:      validator,
 	}
 }
 
@@ -451,6 +465,7 @@ func (s *Service) findToolByName(name string, availableTools []types.Tool) *type
 }
 
 // findToolByCaseInsensitiveName finds a tool by case-insensitive name match
+// Deprecated: Use validator.NormalizeToolName() instead
 func (s *Service) findToolByCaseInsensitiveName(name string, availableTools []types.Tool) *types.Tool {
 	for _, t := range availableTools {
 		if strings.EqualFold(t.Name, name) {
@@ -471,7 +486,7 @@ type ValidationResult struct {
 	CorrectedInput    map[string]interface{} // New: corrected input parameters
 }
 
-// ValidateToolCall performs comprehensive tool call validation
+// ValidateToolCall performs comprehensive tool call validation using injected ToolValidator
 // Made public for testing slash command correction functionality
 func (s *Service) ValidateToolCall(ctx context.Context, call types.Content, availableTools []types.Tool) ValidationResult {
 	requestID := getRequestID(ctx)
@@ -485,15 +500,19 @@ func (s *Service) ValidateToolCall(ctx context.Context, call types.Content, avai
 	// Try exact match first
 	tool := s.findToolByName(call.Name, availableTools)
 	if tool == nil {
-		// Try case-insensitive match
-		tool = s.findToolByCaseInsensitiveName(call.Name, availableTools)
-		if tool != nil {
-			result.HasCaseIssue = true
-			result.CorrectToolName = tool.Name
-			if s.shouldLog() {
-				log.Printf("⚠️[%s] Tool name case issue: '%s' should be '%s'", requestID, call.Name, tool.Name)
+		// Try case-insensitive match using validator
+		if normalizedName, found := s.validator.NormalizeToolName(call.Name); found {
+			tool = s.findToolByName(normalizedName, availableTools)
+			if tool != nil {
+				result.HasCaseIssue = true
+				result.CorrectToolName = tool.Name
+				if s.shouldLog() {
+					log.Printf("⚠️[%s] Tool name case issue: '%s' should be '%s'", requestID, call.Name, tool.Name)
+				}
 			}
-		} else {
+		}
+		
+		if tool == nil {
 			// Check if this is a slash command that should be converted to Task
 			if s.isSlashCommand(call.Name) {
 				return s.correctSlashCommandToTask(ctx, call, availableTools)
@@ -521,30 +540,23 @@ func (s *Service) ValidateToolCall(ctx context.Context, call types.Content, avai
 		log.Printf("🔍[%s] TodoWrite validation - Input params: %v", requestID, getInputParamNames(call.Input))
 	}
 
-	// Check required parameters
-	for _, required := range tool.InputSchema.Required {
-		if _, exists := call.Input[required]; !exists {
-			result.MissingParams = append(result.MissingParams, required)
-		}
-	}
-
-	// Check for invalid parameters
+	// Use injected validator for parameter validation
+	validatorResult := s.validator.ValidateParameters(ctx, call, tool.InputSchema)
+	
+	// Copy validator results to correction service result format
+	result.MissingParams = validatorResult.MissingParams
+	result.InvalidParams = validatorResult.InvalidParams
+	
 	// For Task tools, allow additional parameters (they may come from slash commands)
-	for param := range call.Input {
-		if _, exists := tool.InputSchema.Properties[param]; !exists {
-			if tool.Name == "Task" {
-				// Task tools can have additional parameters from slash commands
-				if s.shouldLog() {
-					log.Printf("🔧[%s] Allowing additional parameter for Task: %s", requestID, param)
-				}
-			} else {
-				result.InvalidParams = append(result.InvalidParams, param)
-				if s.shouldLog() {
-					log.Printf("⚠️[%s] Parameter '%s' not found in schema for %s. Available: %v", 
-						requestID, param, tool.Name, getPropertyNames(tool.InputSchema.Properties))
-				}
+	if tool.Name == "Task" && len(result.InvalidParams) > 0 {
+		var filteredInvalid []string
+		for _, invalid := range result.InvalidParams {
+			if s.shouldLog() {
+				log.Printf("🔧[%s] Allowing additional parameter for Task: %s", requestID, invalid)
 			}
+			// Don't add to filteredInvalid - we're allowing it
 		}
+		result.InvalidParams = filteredInvalid
 	}
 
 	// Enhanced logging: Detailed validation results
@@ -566,7 +578,7 @@ func (s *Service) ValidateToolCall(ctx context.Context, call types.Content, avai
 	}
 
 	// Semantic validation: Check for common tool misuse patterns
-	if result.IsValid && s.DetectSemanticIssue(ctx, call) {
+	if validatorResult.IsValid && s.DetectSemanticIssue(ctx, call) {
 		// Mark as having a tool name issue to trigger correction
 		result.HasToolNameIssue = true
 		result.IsValid = false
