@@ -1502,9 +1502,10 @@ func (s *Service) AttemptRuleBasedParameterCorrection(ctx context.Context, call 
 	// These are extracted from the actual LLM correction prompt patterns
 	toolSpecificMappings := map[string]map[string]string{
 		// File operations: path-related parameters become file_path
-		"Read":  {"filename": "file_path", "path": "file_path"},
-		"Write": {"filename": "file_path", "path": "file_path", "text": "content"},
-		"Edit":  {"filename": "file_path", "path": "file_path"},
+		"Read":      {"filename": "file_path", "path": "file_path"},
+		"Write":     {"filename": "file_path", "path": "file_path", "text": "content"},
+		"Edit":      {"filename": "file_path", "path": "file_path"},
+		"MultiEdit": {"filename": "file_path", "path": "file_path", "filepath": "file_path"},
 		
 		// Search operations: query/search -> pattern, filter -> glob
 		"Grep": {"search": "pattern", "query": "pattern", "filter": "glob"},
