@@ -127,10 +127,11 @@ func TransformAnthropicToOpenAI(ctx context.Context, req types.AnthropicRequest,
 	loggerInstance := logger.FromContext(ctx, loggerConfig)
 	
 	openaiReq := types.OpenAIRequest{
-		Model:     req.Model,
-		MaxTokens: req.MaxTokens,
-		Stream:    req.Stream,
-		Messages:  []types.OpenAIMessage{},
+		Model:       req.Model,
+		MaxTokens:   req.MaxTokens,
+		Stream:      req.Stream,
+		CachePrompt: true,
+		Messages:    []types.OpenAIMessage{},
 	}
 
 	// Handle system messages - convert from Anthropic array to OpenAI string

@@ -174,7 +174,7 @@ func (cl *ConversationLogger) LogConversationStart(ctx context.Context, requestI
 
 // LogRequest logs a complete incoming request
 func (cl *ConversationLogger) LogRequest(ctx context.Context, requestID string, request interface{}) {
-	if !cl.enabled || cl.logLevel > DEBUG {
+	if !cl.enabled || cl.logLevel > INFO {
 		return
 	}
 	
@@ -197,7 +197,7 @@ func (cl *ConversationLogger) LogRequest(ctx context.Context, requestID string, 
 
 // LogResponse logs a complete outgoing response
 func (cl *ConversationLogger) LogResponse(ctx context.Context, requestID string, response interface{}) {
-	if !cl.enabled || cl.logLevel > DEBUG {
+	if !cl.enabled || cl.logLevel > INFO {
 		return
 	}
 	
