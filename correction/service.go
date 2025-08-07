@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"strings"
@@ -39,6 +40,9 @@ func getInputParamNames(input map[string]interface{}) []string {
 // ConfigProvider provides endpoint configuration for the correction service
 type ConfigProvider interface {
 	GetToolCorrectionEndpoint() string
+	GetHealthyToolCorrectionEndpoint() string
+	RecordEndpointFailure(endpoint string)
+	RecordEndpointSuccess(endpoint string)
 }
 
 // Service handles tool call correction using configurable model
@@ -883,37 +887,94 @@ Return ONLY the corrected tool call in this exact JSON format:
 }`, string(callJson), string(schemaJson), todoExample)
 }
 
-// sendCorrectionRequest sends request to qwen2.5-coder
+// sendCorrectionRequest sends request with automatic failover
 func (s *Service) sendCorrectionRequest(req types.OpenAIRequest) (*types.OpenAIResponse, error) {
 	reqBody, err := json.Marshal(req)
 	if err != nil {
 		return nil, err
 	}
 
-	endpoint := s.config.GetToolCorrectionEndpoint()
-	httpReq, err := http.NewRequest("POST", endpoint, bytes.NewBuffer(reqBody))
-	if err != nil {
-		return nil, err
-	}
+	// Try up to 3 endpoints for failover using circuit breaker
+	maxRetries := 3
+	var lastErr error
+	
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		// Get healthy endpoint using circuit breaker
+		endpoint := s.config.GetHealthyToolCorrectionEndpoint()
+		if endpoint == "" {
+			return nil, fmt.Errorf("no tool correction endpoints available")
+		}
+		
+		httpReq, err := http.NewRequest("POST", endpoint, bytes.NewBuffer(reqBody))
+		if err != nil {
+			return nil, err
+		}
 
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+s.apiKey)
+		httpReq.Header.Set("Content-Type", "application/json")
+		httpReq.Header.Set("Authorization", "Bearer "+s.apiKey)
 
-	client := &http.Client{
-		Timeout: 10 * time.Minute, // 10 minute timeout for correction requests
-	}
-	resp, err := client.Do(httpReq)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
+		client := &http.Client{
+			Timeout: 30 * time.Second, // Shorter timeout for faster failover
+		}
+		
+		resp, err := client.Do(httpReq)
+		if err != nil {
+			lastErr = err
+			// Record endpoint failure for circuit breaker
+			s.config.RecordEndpointFailure(endpoint)
+			
+			// Retry on timeout/connection errors
+			if strings.Contains(err.Error(), "timeout") || strings.Contains(err.Error(), "connection refused") || strings.Contains(err.Error(), "context deadline exceeded") {
+				if attempt < maxRetries-1 {
+					log.Printf("⚠️ Tool correction endpoint failed, trying next endpoint (attempt %d/%d): %v", attempt+1, maxRetries, err)
+					continue
+				}
+			}
+			// For non-retryable errors, fail immediately
+			if attempt < maxRetries-1 {
+				log.Printf("⚠️ Tool correction endpoint error, trying next endpoint: %v", err)
+				continue
+			}
+			return nil, fmt.Errorf("tool correction request failed: %v", err)
+		}
+		defer resp.Body.Close()
 
-	var response types.OpenAIResponse
-	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
-		return nil, err
-	}
+		if resp.StatusCode != http.StatusOK {
+			respBody, _ := io.ReadAll(resp.Body)
+			lastErr = fmt.Errorf("endpoint returned status %d: %s", resp.StatusCode, string(respBody))
+			// Record endpoint failure for non-200 status codes
+			s.config.RecordEndpointFailure(endpoint)
+			
+			if attempt < maxRetries-1 {
+				log.Printf("⚠️ Tool correction endpoint returned %d, trying next endpoint", resp.StatusCode)
+				continue
+			}
+			return nil, lastErr
+		}
 
-	return &response, nil
+		var response types.OpenAIResponse
+		if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+			lastErr = err
+			// Record endpoint failure for JSON parse errors  
+			s.config.RecordEndpointFailure(endpoint)
+			
+			if attempt < maxRetries-1 {
+				log.Printf("⚠️ Tool correction response parse failed, trying next endpoint: %v", err)
+				continue
+			}
+			return nil, fmt.Errorf("failed to parse response: %v", err)
+		}
+		
+		// Success - record endpoint success for circuit breaker
+		s.config.RecordEndpointSuccess(endpoint)
+		
+		if attempt > 0 {
+			log.Printf("✅ Tool correction succeeded on fallback endpoint (attempt %d)", attempt+1)
+		}
+		return &response, nil
+	}
+	
+	return nil, fmt.Errorf("all tool correction endpoints failed, last error: %v", lastErr)
 }
 
 // parseCorrectedResponse extracts the corrected tool call from qwen2.5-coder response

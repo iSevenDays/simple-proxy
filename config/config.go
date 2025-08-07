@@ -10,9 +10,37 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 	
 	"gopkg.in/yaml.v3"
 )
+
+// EndpointHealth tracks the health status of an endpoint
+type EndpointHealth struct {
+	URL              string    `json:"url"`
+	FailureCount     int       `json:"failure_count"`
+	LastFailureTime  time.Time `json:"last_failure_time"`
+	CircuitOpen      bool      `json:"circuit_open"`
+	NextRetryTime    time.Time `json:"next_retry_time"`
+}
+
+// CircuitBreakerConfig controls circuit breaker behavior
+type CircuitBreakerConfig struct {
+	FailureThreshold   int           `json:"failure_threshold"`   // Number of failures before opening circuit
+	BackoffDuration    time.Duration `json:"backoff_duration"`    // How long to wait before retrying failed endpoint
+	MaxBackoffDuration time.Duration `json:"max_backoff_duration"` // Maximum backoff time
+	ResetTimeout       time.Duration `json:"reset_timeout"`       // Time to reset failure count after success
+}
+
+// DefaultCircuitBreakerConfig returns sensible defaults for circuit breaker
+func DefaultCircuitBreakerConfig() CircuitBreakerConfig {
+	return CircuitBreakerConfig{
+		FailureThreshold:   2,                // Open circuit after 2 consecutive failures
+		BackoffDuration:    30 * time.Second, // Initial 30s backoff
+		MaxBackoffDuration: 5 * time.Minute,  // Max 5min backoff
+		ResetTimeout:       1 * time.Minute,  // Reset failure count after 1min of success
+	}
+}
 
 // Config represents the proxy configuration - all settings from .env
 type Config struct {
@@ -65,6 +93,11 @@ type Config struct {
 	smallModelIndex          int    `json:"-"`
 	toolCorrectionIndex      int    `json:"-"`
 	mutex                    sync.Mutex `json:"-"`
+	
+	// Circuit breaker configuration and health tracking
+	CircuitBreaker           CircuitBreakerConfig       `json:"circuit_breaker"`
+	EndpointHealthMap        map[string]*EndpointHealth `json:"-"`
+	healthMutex              sync.RWMutex               `json:"-"`
 }
 
 // GetDefaultConfig returns a default configuration for testing
@@ -114,6 +147,7 @@ func LoadConfigWithEnv() (*Config, error) {
 		ConversationLoggingEnabled: false, // Disabled by default
 		ConversationLogLevel:       "INFO", // Default to INFO level
 		ConversationMaskSensitive:  true,  // Enable sensitive data masking by default
+		CircuitBreaker:         DefaultCircuitBreakerConfig(),
 		SystemMessageOverrides: SystemMessageOverrides{}, // Empty by default
 	}
 
@@ -352,6 +386,9 @@ func LoadConfigWithEnv() (*Config, error) {
 	} else {
 		cfg.SystemMessageOverrides = systemOverrides
 	}
+
+	// Initialize circuit breaker health tracking
+	cfg.InitializeEndpointHealthMap()
 
 	return cfg, nil
 }
@@ -610,6 +647,192 @@ func (c *Config) GetToolCorrectionEndpoint() string {
 		return ""
 	}
 	
+	endpoint := c.ToolCorrectionEndpoints[c.toolCorrectionIndex]
+	c.toolCorrectionIndex = (c.toolCorrectionIndex + 1) % len(c.ToolCorrectionEndpoints)
+	return endpoint
+}
+
+// InitializeEndpointHealthMap initializes health tracking for all endpoints
+func (c *Config) InitializeEndpointHealthMap() {
+	c.healthMutex.Lock()
+	defer c.healthMutex.Unlock()
+	
+	if c.EndpointHealthMap == nil {
+		c.EndpointHealthMap = make(map[string]*EndpointHealth)
+	}
+	
+	// Initialize health for all endpoints
+	allEndpoints := append(c.BigModelEndpoints, c.SmallModelEndpoints...)
+	allEndpoints = append(allEndpoints, c.ToolCorrectionEndpoints...)
+	
+	for _, endpoint := range allEndpoints {
+		if _, exists := c.EndpointHealthMap[endpoint]; !exists {
+			c.EndpointHealthMap[endpoint] = &EndpointHealth{
+				URL:          endpoint,
+				FailureCount: 0,
+				CircuitOpen:  false,
+			}
+		}
+	}
+}
+
+// IsEndpointHealthy checks if an endpoint is available (circuit closed)
+func (c *Config) IsEndpointHealthy(endpoint string) bool {
+	c.healthMutex.RLock()
+	defer c.healthMutex.RUnlock()
+	
+	health, exists := c.EndpointHealthMap[endpoint]
+	if !exists {
+		return true // Unknown endpoints are assumed healthy
+	}
+	
+	// If circuit is open, check if it's time to retry
+	if health.CircuitOpen {
+		if time.Now().After(health.NextRetryTime) {
+			return true // Time to test the endpoint again
+		}
+		return false // Still in backoff period
+	}
+	
+	return true // Circuit is closed, endpoint is healthy
+}
+
+// GetEndpointHealthDebug returns debug information about an endpoint's health
+func (c *Config) GetEndpointHealthDebug(endpoint string) (failureCount int, circuitOpen bool, nextRetryTime time.Time, exists bool) {
+	c.healthMutex.RLock()
+	defer c.healthMutex.RUnlock()
+	
+	health, exists := c.EndpointHealthMap[endpoint]
+	if !exists {
+		return 0, false, time.Time{}, false
+	}
+	
+	return health.FailureCount, health.CircuitOpen, health.NextRetryTime, true
+}
+
+// RecordEndpointFailure marks an endpoint as failed and potentially opens its circuit
+func (c *Config) RecordEndpointFailure(endpoint string) {
+	c.healthMutex.Lock()
+	defer c.healthMutex.Unlock()
+	
+	health, exists := c.EndpointHealthMap[endpoint]
+	if !exists {
+		health = &EndpointHealth{URL: endpoint}
+		c.EndpointHealthMap[endpoint] = health
+	}
+	
+	health.FailureCount++
+	health.LastFailureTime = time.Now()
+	
+	// Open circuit if failure threshold exceeded
+	if health.FailureCount >= c.CircuitBreaker.FailureThreshold {
+		health.CircuitOpen = true
+		
+		// Calculate backoff time with exponential backoff capped at max
+		// When we hit threshold, we want at least 1x backoff
+		failuresOverThreshold := health.FailureCount - c.CircuitBreaker.FailureThreshold + 1
+		if failuresOverThreshold < 1 {
+			failuresOverThreshold = 1
+		}
+		backoff := time.Duration(int64(c.CircuitBreaker.BackoffDuration) * int64(failuresOverThreshold))
+		if backoff > c.CircuitBreaker.MaxBackoffDuration {
+			backoff = c.CircuitBreaker.MaxBackoffDuration
+		}
+		
+		
+		now := time.Now()
+		health.NextRetryTime = now.Add(backoff)
+		
+		log.Printf("🚨 Circuit breaker opened for endpoint %s (failures: %d, retry in: %v)", 
+			endpoint, health.FailureCount, backoff)
+	} else {
+		log.Printf("⚠️ Endpoint failure recorded: %s (failures: %d/%d)", 
+			endpoint, health.FailureCount, c.CircuitBreaker.FailureThreshold)
+	}
+}
+
+// RecordEndpointSuccess marks an endpoint as successful and potentially closes its circuit
+func (c *Config) RecordEndpointSuccess(endpoint string) {
+	c.healthMutex.Lock()
+	defer c.healthMutex.Unlock()
+	
+	health, exists := c.EndpointHealthMap[endpoint]
+	if !exists {
+		health = &EndpointHealth{URL: endpoint}
+		c.EndpointHealthMap[endpoint] = health
+	}
+	
+	// If circuit was open, close it and reset
+	if health.CircuitOpen {
+		health.CircuitOpen = false
+		health.FailureCount = 0
+		health.NextRetryTime = time.Time{}
+		log.Printf("✅ Circuit breaker closed for endpoint %s (recovered)", endpoint)
+	} else if health.FailureCount > 0 {
+		// Gradually reduce failure count on success
+		health.FailureCount = 0
+		log.Printf("✅ Endpoint recovered: %s (failure count reset)", endpoint)
+	}
+}
+
+// GetHealthySmallModelEndpoint returns the next healthy SMALL_MODEL endpoint
+func (c *Config) GetHealthySmallModelEndpoint() string {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	
+	if len(c.SmallModelEndpoints) == 0 {
+		return ""
+	}
+	
+	// Try to find a healthy endpoint, starting from current index
+	startIndex := c.smallModelIndex
+	for i := 0; i < len(c.SmallModelEndpoints); i++ {
+		endpoint := c.SmallModelEndpoints[c.smallModelIndex]
+		c.smallModelIndex = (c.smallModelIndex + 1) % len(c.SmallModelEndpoints)
+		
+		if c.IsEndpointHealthy(endpoint) {
+			return endpoint
+		}
+		
+		// If we've cycled through all endpoints, break to avoid infinite loop
+		if c.smallModelIndex == startIndex {
+			break
+		}
+	}
+	
+	// If no healthy endpoints found, return the next one anyway (last resort)
+	// This handles the case where all endpoints are unhealthy
+	endpoint := c.SmallModelEndpoints[c.smallModelIndex]
+	c.smallModelIndex = (c.smallModelIndex + 1) % len(c.SmallModelEndpoints)
+	return endpoint
+}
+
+// GetHealthyToolCorrectionEndpoint returns the next healthy TOOL_CORRECTION endpoint
+func (c *Config) GetHealthyToolCorrectionEndpoint() string {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	
+	if len(c.ToolCorrectionEndpoints) == 0 {
+		return ""
+	}
+	
+	// Try to find a healthy endpoint, starting from current index
+	startIndex := c.toolCorrectionIndex
+	for i := 0; i < len(c.ToolCorrectionEndpoints); i++ {
+		endpoint := c.ToolCorrectionEndpoints[c.toolCorrectionIndex]
+		c.toolCorrectionIndex = (c.toolCorrectionIndex + 1) % len(c.ToolCorrectionEndpoints)
+		
+		if c.IsEndpointHealthy(endpoint) {
+			return endpoint
+		}
+		
+		// If we've cycled through all endpoints, break to avoid infinite loop
+		if c.toolCorrectionIndex == startIndex {
+			break
+		}
+	}
+	
+	// If no healthy endpoints found, return the next one anyway (last resort)
 	endpoint := c.ToolCorrectionEndpoints[c.toolCorrectionIndex]
 	c.toolCorrectionIndex = (c.toolCorrectionIndex + 1) % len(c.ToolCorrectionEndpoints)
 	return endpoint

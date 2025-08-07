@@ -1,55 +1,62 @@
-package main
+package test
 
 import (
 	"claude-proxy/config"
-	"fmt"
-	"log"
-	"os"
 	"strings"
+	"testing"
 )
 
-func main() {
-	// Backup original .env file if it exists
-	if _, err := os.Stat(".env"); err == nil {
-		err := os.Rename(".env", ".env.backup")
-		if err != nil {
-			log.Fatalf("Failed to backup .env: %v", err)
-		}
-		defer os.Rename(".env.backup", ".env")
-	}
-
-	// Copy test config to .env
-	err := os.Rename("test_endpoints.env", ".env")
-	if err != nil {
-		log.Fatalf("Failed to setup test .env: %v", err)
-	}
-	defer os.Remove(".env")
-
-	// Load configuration
+// TestMultiEndpointConfiguration tests configuration loading with existing .env
+func TestMultiEndpointConfiguration(t *testing.T) {
+	// Load configuration using existing .env file
 	cfg, err := config.LoadConfigWithEnv()
 	if err != nil {
-		log.Fatalf("Failed to load config: %v", err)
+		t.Fatalf("Failed to load config: %v", err)
 	}
 
-	fmt.Printf("✅ Configuration loaded successfully!\n")
-	fmt.Printf("🔧 BIG_MODEL endpoints: %v (%d)\n", cfg.BigModelEndpoints, len(cfg.BigModelEndpoints))
-	fmt.Printf("🔧 SMALL_MODEL endpoints: %v (%d)\n", cfg.SmallModelEndpoints, len(cfg.SmallModelEndpoints))
-	fmt.Printf("🔧 TOOL_CORRECTION endpoints: %v (%d)\n", cfg.ToolCorrectionEndpoints, len(cfg.ToolCorrectionEndpoints))
+	t.Logf("✅ Configuration loaded successfully!")
+	t.Logf("🔧 BIG_MODEL endpoints: %v (%d)", cfg.BigModelEndpoints, len(cfg.BigModelEndpoints))
+	t.Logf("🔧 SMALL_MODEL endpoints: %v (%d)", cfg.SmallModelEndpoints, len(cfg.SmallModelEndpoints))
+	t.Logf("🔧 TOOL_CORRECTION endpoints: %v (%d)", cfg.ToolCorrectionEndpoints, len(cfg.ToolCorrectionEndpoints))
+
+	// Verify configuration meets requirements
+	if len(cfg.BigModelEndpoints) == 0 {
+		t.Error("Expected at least 1 BIG_MODEL endpoint")
+	}
+	if len(cfg.SmallModelEndpoints) == 0 {
+		t.Error("Expected at least 1 SMALL_MODEL endpoint")
+	}
+	if len(cfg.ToolCorrectionEndpoints) == 0 {
+		t.Error("Expected at least 1 TOOL_CORRECTION endpoint")
+	}
 
 	// Test round-robin functionality
-	fmt.Printf("\n🔄 Testing round-robin functionality:\n")
+	t.Log("\n🔄 Testing round-robin functionality:")
 	for i := 0; i < 6; i++ {
 		big := cfg.GetBigModelEndpoint()
 		small := cfg.GetSmallModelEndpoint()
 		correction := cfg.GetToolCorrectionEndpoint()
+		
 		// Extract IP from URL for cleaner display
 		bigIP := extractIP(big)
 		smallIP := extractIP(small)
 		correctionIP := extractIP(correction)
-		fmt.Printf("Round %d: BIG=%s, SMALL=%s, CORRECTION=%s\n", i+1, bigIP, smallIP, correctionIP)
+		
+		t.Logf("Round %d: BIG=%s, SMALL=%s, CORRECTION=%s", i+1, bigIP, smallIP, correctionIP)
+		
+		// Verify endpoints are valid URLs
+		if !strings.HasPrefix(big, "http") {
+			t.Errorf("Invalid BIG_MODEL endpoint: %s", big)
+		}
+		if !strings.HasPrefix(small, "http") {
+			t.Errorf("Invalid SMALL_MODEL endpoint: %s", small)
+		}
+		if !strings.HasPrefix(correction, "http") {
+			t.Errorf("Invalid TOOL_CORRECTION endpoint: %s", correction)
+		}
 	}
 
-	fmt.Printf("\n✅ Multi-endpoint functionality test completed successfully!\n")
+	t.Log("✅ Multi-endpoint functionality test completed successfully!")
 }
 
 // extractIP extracts the IP address from a URL for cleaner display

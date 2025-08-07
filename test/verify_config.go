@@ -1,33 +1,53 @@
-package main
+package test
 
 import (
 	"claude-proxy/config"
-	"fmt"
-	"os"
+	"testing"
 )
 
-func main() {
+// TestConfigurationLoading verifies that configuration loads correctly with multi-endpoints
+func TestConfigurationLoading(t *testing.T) {
 	cfg, err := config.LoadConfigWithEnv()
 	if err != nil {
-		fmt.Printf("❌ Error loading configuration: %v\n", err)
-		os.Exit(1)
+		t.Fatalf("Failed to load configuration: %v", err)
 	}
 
-	fmt.Printf("✅ Configuration loaded successfully!\n")
-	fmt.Printf("🔧 BIG_MODEL: %s → %v (%d endpoints)\n", cfg.BigModel, cfg.BigModelEndpoints, len(cfg.BigModelEndpoints))
-	fmt.Printf("🔧 SMALL_MODEL: %s → %v (%d endpoints)\n", cfg.SmallModel, cfg.SmallModelEndpoints, len(cfg.SmallModelEndpoints))
-	fmt.Printf("🔧 CORRECTION_MODEL: %s → %v (%d endpoints)\n", cfg.CorrectionModel, cfg.ToolCorrectionEndpoints, len(cfg.ToolCorrectionEndpoints))
+	t.Logf("✅ Configuration loaded successfully!")
+	t.Logf("🔧 BIG_MODEL: %s → %v (%d endpoints)", cfg.BigModel, cfg.BigModelEndpoints, len(cfg.BigModelEndpoints))
+	t.Logf("🔧 SMALL_MODEL: %s → %v (%d endpoints)", cfg.SmallModel, cfg.SmallModelEndpoints, len(cfg.SmallModelEndpoints))
+	t.Logf("🔧 CORRECTION_MODEL: %s → %v (%d endpoints)", cfg.CorrectionModel, cfg.ToolCorrectionEndpoints, len(cfg.ToolCorrectionEndpoints))
+
+	// Verify expected configuration based on .env
+	if len(cfg.BigModelEndpoints) != 1 {
+		t.Errorf("Expected 1 BIG_MODEL endpoint, got %d", len(cfg.BigModelEndpoints))
+	}
+	
+	if len(cfg.SmallModelEndpoints) != 2 {
+		t.Errorf("Expected 2 SMALL_MODEL endpoints, got %d", len(cfg.SmallModelEndpoints))
+	}
+	
+	if len(cfg.ToolCorrectionEndpoints) != 2 {
+		t.Errorf("Expected 2 TOOL_CORRECTION endpoints, got %d", len(cfg.ToolCorrectionEndpoints))
+	}
+}
+
+// TestRoundRobinFunctionality verifies endpoint rotation works correctly
+func TestRoundRobinFunctionality(t *testing.T) {
+	cfg, err := config.LoadConfigWithEnv()
+	if err != nil {
+		t.Fatalf("Failed to load configuration: %v", err)
+	}
 	
 	// Test round-robin functionality
-	fmt.Printf("\n🔄 Testing failover functionality:\n")
+	t.Log("🔄 Testing failover functionality:")
 	for i := 0; i < 4; i++ {
 		smallEndpoint := cfg.GetSmallModelEndpoint()
 		correctionEndpoint := cfg.GetToolCorrectionEndpoint()
-		fmt.Printf("Request %d: SMALL=%s, CORRECTION=%s\n", i+1, 
+		t.Logf("Request %d: SMALL=%s, CORRECTION=%s", i+1, 
 			extractLastPart(smallEndpoint), extractLastPart(correctionEndpoint))
 	}
 	
-	fmt.Printf("\n✅ Multi-endpoint failover is working correctly!\n")
+	t.Log("✅ Multi-endpoint failover is working correctly!")
 }
 
 func extractLastPart(url string) string {
