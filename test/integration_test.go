@@ -18,11 +18,11 @@ import (
 func TestProxyIntegration(t *testing.T) {
 	// Create test configuration
 	cfg := &config.Config{
-		BigModelEndpoint:       "http://mock-kimi",
+		BigModelEndpoints:       []string{"http://mock-kimi"},
 		BigModelAPIKey:         "test-key",
-		SmallModelEndpoint:     "http://mock-qwen",
+		SmallModelEndpoints:     []string{"http://mock-qwen"},
 		SmallModelAPIKey:       "qwen-key",
-		ToolCorrectionEndpoint: "http://mock-correction",
+		ToolCorrectionEndpoints: []string{"http://mock-correction"},
 		ToolCorrectionAPIKey:   "correction-key",
 		BigModel:               "kimi-k2",
 		SmallModel:             "qwen2.5-coder:latest",
@@ -77,7 +77,7 @@ func TestProxyIntegration(t *testing.T) {
 	defer mockServer.Close()
 
 	// Update config to use mock server
-	cfg.BigModelEndpoint = mockServer.URL
+	cfg.BigModelEndpoints = []string{mockServer.URL}
 
 	// Create handler
 	handler := proxy.NewHandler(cfg, nil)
@@ -144,11 +144,11 @@ func TestProxyIntegration(t *testing.T) {
 // TestProxyToolCallIntegration tests tool calling workflow
 func TestProxyToolCallIntegration(t *testing.T) {
 	cfg := &config.Config{
-		BigModelEndpoint:       "http://mock-kimi",
+		BigModelEndpoints:       []string{"http://mock-kimi"},
 		BigModelAPIKey:         "test-key",
-		SmallModelEndpoint:     "http://mock-qwen",
+		SmallModelEndpoints:     []string{"http://mock-qwen"},
 		SmallModelAPIKey:       "qwen-key",
-		ToolCorrectionEndpoint: "http://mock-correction",
+		ToolCorrectionEndpoints: []string{"http://mock-correction"},
 		ToolCorrectionAPIKey:   "correction-key",
 		BigModel:               "kimi-k2",
 		SmallModel:             "qwen2.5-coder:latest",
@@ -196,7 +196,7 @@ func TestProxyToolCallIntegration(t *testing.T) {
 	}))
 	defer mockServer.Close()
 
-	cfg.BigModelEndpoint = mockServer.URL
+	cfg.BigModelEndpoints = []string{mockServer.URL}
 	handler := proxy.NewHandler(cfg, nil)
 
 	// Request with tools
@@ -316,11 +316,11 @@ func TestProxyErrorHandling(t *testing.T) {
 				defer mockServer.Close()
 				
 				cfg = &config.Config{
-					BigModelEndpoint:       mockServer.URL,
+					BigModelEndpoints:       []string{mockServer.URL},
 					BigModelAPIKey:         "test-key",
-					SmallModelEndpoint:     mockServer.URL,
+					SmallModelEndpoints:     []string{mockServer.URL},
 					SmallModelAPIKey:       "test-key",
-					ToolCorrectionEndpoint: mockServer.URL,
+					ToolCorrectionEndpoints: []string{mockServer.URL},
 					ToolCorrectionAPIKey:   "test-key",
 					BigModel:               "kimi-k2",
 					SmallModel:             "qwen2.5-coder:latest",

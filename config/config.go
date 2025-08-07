@@ -9,6 +9,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	
 	"gopkg.in/yaml.v3"
 )
@@ -49,15 +50,21 @@ type Config struct {
 	SmallModel       string `json:"small_model"`       // For Claude Haiku requests
 	CorrectionModel  string `json:"correction_model"`  // For tool correction service
 	
-	// Endpoint configuration (.env configurable)
-	BigModelEndpoint         string `json:"big_model_endpoint"`         // Endpoint for BIG_MODEL
-	SmallModelEndpoint       string `json:"small_model_endpoint"`       // Endpoint for SMALL_MODEL
-	ToolCorrectionEndpoint   string `json:"tool_correction_endpoint"`   // Endpoint for TOOL_CORRECTION_LLM
+	// Endpoint configuration (.env configurable) - supports multiple endpoints
+	BigModelEndpoints        []string `json:"big_model_endpoints"`        // Endpoints for BIG_MODEL (comma-separated)
+	SmallModelEndpoints      []string `json:"small_model_endpoints"`      // Endpoints for SMALL_MODEL (comma-separated)
+	ToolCorrectionEndpoints  []string `json:"tool_correction_endpoints"`  // Endpoints for TOOL_CORRECTION_LLM (comma-separated)
 	
 	// API Key configuration (.env configurable)
 	BigModelAPIKey           string `json:"big_model_api_key"`           // API Key for BIG_MODEL
 	SmallModelAPIKey         string `json:"small_model_api_key"`         // API Key for SMALL_MODEL
 	ToolCorrectionAPIKey     string `json:"tool_correction_api_key"`     // API Key for TOOL_CORRECTION_LLM
+	
+	// Endpoint rotation state (not serialized)
+	bigModelIndex            int    `json:"-"`
+	smallModelIndex          int    `json:"-"`
+	toolCorrectionIndex      int    `json:"-"`
+	mutex                    sync.Mutex `json:"-"`
 }
 
 // GetDefaultConfig returns a default configuration for testing
@@ -78,9 +85,9 @@ func GetDefaultConfig() *Config {
 		BigModel:               "",  // Will be set from .env
 		SmallModel:             "",  // Will be set from .env
 		CorrectionModel:        "",  // Will be set from .env
-		BigModelEndpoint:       "",  // Will be set from .env
-		SmallModelEndpoint:     "",  // Will be set from .env
-		ToolCorrectionEndpoint: "",  // Will be set from .env
+		BigModelEndpoints:      []string{}, // Will be set from .env
+		SmallModelEndpoints:     []string{}, // Will be set from .env
+		ToolCorrectionEndpoints: []string{}, // Will be set from .env
 		BigModelAPIKey:         "",  // Will be set from .env
 		SmallModelAPIKey:       "",  // Will be set from .env
 		ToolCorrectionAPIKey:   "",  // Will be set from .env
@@ -132,16 +139,40 @@ func LoadConfigWithEnv() (*Config, error) {
 		return nil, fmt.Errorf("CORRECTION_MODEL must be set in .env file")
 	}
 
-	if bigEndpoint, exists := envVars["BIG_MODEL_ENDPOINT"]; exists && bigEndpoint != "" {
-		cfg.BigModelEndpoint = bigEndpoint
-		log.Printf("🔧 Configured BIG_MODEL_ENDPOINT: %s", bigEndpoint)
+	// Parse BIG_MODEL_ENDPOINT (comma-separated list)
+	if bigEndpoints, exists := envVars["BIG_MODEL_ENDPOINT"]; exists && bigEndpoints != "" {
+		endpoints := strings.Split(bigEndpoints, ",")
+		for i, endpoint := range endpoints {
+			endpoints[i] = strings.TrimSpace(endpoint)
+		}
+		// Filter out empty strings
+		filteredEndpoints := make([]string, 0, len(endpoints))
+		for _, endpoint := range endpoints {
+			if endpoint != "" {
+				filteredEndpoints = append(filteredEndpoints, endpoint)
+			}
+		}
+		cfg.BigModelEndpoints = filteredEndpoints
+		log.Printf("🔧 Configured BIG_MODEL_ENDPOINT: %v (%d endpoints)", cfg.BigModelEndpoints, len(cfg.BigModelEndpoints))
 	} else {
 		return nil, fmt.Errorf("BIG_MODEL_ENDPOINT must be set in .env file")
 	}
 
-	if smallEndpoint, exists := envVars["SMALL_MODEL_ENDPOINT"]; exists && smallEndpoint != "" {
-		cfg.SmallModelEndpoint = smallEndpoint
-		log.Printf("🔧 Configured SMALL_MODEL_ENDPOINT: %s", smallEndpoint)
+	// Parse SMALL_MODEL_ENDPOINT (comma-separated list)
+	if smallEndpoints, exists := envVars["SMALL_MODEL_ENDPOINT"]; exists && smallEndpoints != "" {
+		endpoints := strings.Split(smallEndpoints, ",")
+		for i, endpoint := range endpoints {
+			endpoints[i] = strings.TrimSpace(endpoint)
+		}
+		// Filter out empty strings
+		filteredEndpoints := make([]string, 0, len(endpoints))
+		for _, endpoint := range endpoints {
+			if endpoint != "" {
+				filteredEndpoints = append(filteredEndpoints, endpoint)
+			}
+		}
+		cfg.SmallModelEndpoints = filteredEndpoints
+		log.Printf("🔧 Configured SMALL_MODEL_ENDPOINT: %v (%d endpoints)", cfg.SmallModelEndpoints, len(cfg.SmallModelEndpoints))
 	} else {
 		return nil, fmt.Errorf("SMALL_MODEL_ENDPOINT must be set in .env file")
 	}
@@ -160,9 +191,21 @@ func LoadConfigWithEnv() (*Config, error) {
 		return nil, fmt.Errorf("SMALL_MODEL_API_KEY must be set in .env file")
 	}
 
-	if toolCorrectionEndpoint, exists := envVars["TOOL_CORRECTION_ENDPOINT"]; exists && toolCorrectionEndpoint != "" {
-		cfg.ToolCorrectionEndpoint = toolCorrectionEndpoint
-		log.Printf("🔧 Configured TOOL_CORRECTION_ENDPOINT: %s", toolCorrectionEndpoint)
+	// Parse TOOL_CORRECTION_ENDPOINT (comma-separated list)
+	if toolCorrectionEndpoints, exists := envVars["TOOL_CORRECTION_ENDPOINT"]; exists && toolCorrectionEndpoints != "" {
+		endpoints := strings.Split(toolCorrectionEndpoints, ",")
+		for i, endpoint := range endpoints {
+			endpoints[i] = strings.TrimSpace(endpoint)
+		}
+		// Filter out empty strings
+		filteredEndpoints := make([]string, 0, len(endpoints))
+		for _, endpoint := range endpoints {
+			if endpoint != "" {
+				filteredEndpoints = append(filteredEndpoints, endpoint)
+			}
+		}
+		cfg.ToolCorrectionEndpoints = filteredEndpoints
+		log.Printf("🔧 Configured TOOL_CORRECTION_ENDPOINT: %v (%d endpoints)", cfg.ToolCorrectionEndpoints, len(cfg.ToolCorrectionEndpoints))
 	} else {
 		return nil, fmt.Errorf("TOOL_CORRECTION_ENDPOINT must be set in .env file")
 	}
@@ -528,4 +571,70 @@ func ApplySystemMessageOverrides(originalMessage string, overrides SystemMessage
 	}
 
 	return message
+}
+
+// GetBigModelEndpoint returns the next BIG_MODEL endpoint with round-robin failover
+func (c *Config) GetBigModelEndpoint() string {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	
+	if len(c.BigModelEndpoints) == 0 {
+		return ""
+	}
+	
+	endpoint := c.BigModelEndpoints[c.bigModelIndex]
+	c.bigModelIndex = (c.bigModelIndex + 1) % len(c.BigModelEndpoints)
+	return endpoint
+}
+
+// GetSmallModelEndpoint returns the next SMALL_MODEL endpoint with round-robin failover
+func (c *Config) GetSmallModelEndpoint() string {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	
+	if len(c.SmallModelEndpoints) == 0 {
+		return ""
+	}
+	
+	endpoint := c.SmallModelEndpoints[c.smallModelIndex]
+	c.smallModelIndex = (c.smallModelIndex + 1) % len(c.SmallModelEndpoints)
+	return endpoint
+}
+
+// GetToolCorrectionEndpoint returns the next TOOL_CORRECTION endpoint with round-robin failover
+func (c *Config) GetToolCorrectionEndpoint() string {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	
+	if len(c.ToolCorrectionEndpoints) == 0 {
+		return ""
+	}
+	
+	endpoint := c.ToolCorrectionEndpoints[c.toolCorrectionIndex]
+	c.toolCorrectionIndex = (c.toolCorrectionIndex + 1) % len(c.ToolCorrectionEndpoints)
+	return endpoint
+}
+
+// MarkEndpointFailed moves to the next endpoint when the current one fails
+func (c *Config) MarkEndpointFailed(endpointType string) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	
+	switch endpointType {
+	case "big_model":
+		if len(c.BigModelEndpoints) > 1 {
+			c.bigModelIndex = (c.bigModelIndex + 1) % len(c.BigModelEndpoints)
+			log.Printf("⚠️ Big model endpoint failed, switching to index %d", c.bigModelIndex)
+		}
+	case "small_model":
+		if len(c.SmallModelEndpoints) > 1 {
+			c.smallModelIndex = (c.smallModelIndex + 1) % len(c.SmallModelEndpoints)
+			log.Printf("⚠️ Small model endpoint failed, switching to index %d", c.smallModelIndex)
+		}
+	case "tool_correction":
+		if len(c.ToolCorrectionEndpoints) > 1 {
+			c.toolCorrectionIndex = (c.toolCorrectionIndex + 1) % len(c.ToolCorrectionEndpoints)
+			log.Printf("⚠️ Tool correction endpoint failed, switching to index %d", c.toolCorrectionIndex)
+		}
+	}
 }

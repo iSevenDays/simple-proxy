@@ -376,7 +376,131 @@ func TransformAnthropicToOpenAI(ctx context.Context, req types.AnthropicRequest,
 		}
 		
 		modelLogger.Debug(msgInfo)
-		modelLogger.Debug("🔍     Content preview: %q", contentPreview)
+		
+		// Show more informative logging for different message types
+		if len(msg.Content) == 0 && len(msg.ToolCalls) > 0 {
+			// Assistant message with only tool calls - show tool info instead of empty content
+			toolInfos := make([]string, len(msg.ToolCalls))
+			for i, toolCall := range msg.ToolCalls {
+				// Show tool name and key parameters for better debugging
+				toolInfo := toolCall.Function.Name
+				if toolCall.Function.Arguments != "" {
+					var args map[string]interface{}
+					if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &args); err == nil {
+						// Show actual parameter values for better debugging
+						var paramPairs []string
+						
+						// For specific tools, show the most relevant parameters
+						switch toolCall.Function.Name {
+						case "Read", "Write", "Edit", "MultiEdit":
+							if filePath, ok := args["file_path"].(string); ok {
+								// Show just filename, not full path
+								if parts := strings.Split(filePath, "/"); len(parts) > 0 {
+									filename := parts[len(parts)-1]
+									paramPairs = append(paramPairs, fmt.Sprintf("file=%s", filename))
+								}
+							}
+							// Show additional relevant params for Write/Edit
+							if toolCall.Function.Name != "Read" {
+								if content, ok := args["content"].(string); ok && len(content) > 0 {
+									// Show first 20 chars of content
+									contentPreview := content
+									if len(contentPreview) > 20 {
+										contentPreview = contentPreview[:20] + "..."
+									}
+									paramPairs = append(paramPairs, fmt.Sprintf("content=%q", contentPreview))
+								}
+								if oldString, ok := args["old_string"].(string); ok && len(oldString) > 0 {
+									// Show first 15 chars of old_string for Edit
+									oldPreview := oldString
+									if len(oldPreview) > 15 {
+										oldPreview = oldPreview[:15] + "..."
+									}
+									paramPairs = append(paramPairs, fmt.Sprintf("old=%q", oldPreview))
+								}
+							}
+						case "TodoWrite":
+							if todos, ok := args["todos"].([]interface{}); ok {
+								paramPairs = append(paramPairs, fmt.Sprintf("todos=%d", len(todos)))
+							}
+						case "Bash":
+							if command, ok := args["command"].(string); ok {
+								// Show first 40 chars of command
+								commandPreview := command
+								if len(commandPreview) > 40 {
+									commandPreview = commandPreview[:40] + "..."
+								}
+								paramPairs = append(paramPairs, fmt.Sprintf("cmd=%q", commandPreview))
+							}
+						case "Grep":
+							if pattern, ok := args["pattern"].(string); ok {
+								paramPairs = append(paramPairs, fmt.Sprintf("pattern=%q", pattern))
+							}
+							if path, ok := args["path"].(string); ok {
+								// Show just directory name for path
+								if parts := strings.Split(path, "/"); len(parts) > 0 {
+									dirname := parts[len(parts)-1]
+									if dirname == "" && len(parts) > 1 {
+										dirname = parts[len(parts)-2] + "/"
+									}
+									paramPairs = append(paramPairs, fmt.Sprintf("path=%s", dirname))
+								}
+							}
+						case "Task":
+							if prompt, ok := args["prompt"].(string); ok {
+								// Show first 30 chars of prompt
+								promptPreview := prompt
+								if len(promptPreview) > 30 {
+									promptPreview = promptPreview[:30] + "..."
+								}
+								paramPairs = append(paramPairs, fmt.Sprintf("prompt=%q", promptPreview))
+							}
+							if description, ok := args["description"].(string); ok {
+								paramPairs = append(paramPairs, fmt.Sprintf("desc=%q", description))
+							}
+						case "WebSearch":
+							if query, ok := args["query"].(string); ok {
+								paramPairs = append(paramPairs, fmt.Sprintf("query=%q", query))
+							}
+						case "WebFetch":
+							if url, ok := args["url"].(string); ok {
+								// Show domain from URL
+								if parts := strings.Split(url, "/"); len(parts) > 2 {
+									domain := parts[2]
+									paramPairs = append(paramPairs, fmt.Sprintf("url=%s", domain))
+								} else {
+									paramPairs = append(paramPairs, fmt.Sprintf("url=%s", url))
+								}
+							}
+						default:
+							// For other tools, show first few key parameters
+							paramCount := 0
+							for key, value := range args {
+								if paramCount >= 2 { // Limit to 2 params to avoid log pollution
+									break
+								}
+								valueStr := fmt.Sprintf("%v", value)
+								if len(valueStr) > 20 {
+									valueStr = valueStr[:20] + "..."
+								}
+								paramPairs = append(paramPairs, fmt.Sprintf("%s=%s", key, valueStr))
+								paramCount++
+							}
+						}
+						
+						if len(paramPairs) > 0 {
+							toolInfo += fmt.Sprintf("(%s)", strings.Join(paramPairs, ", "))
+						}
+					}
+				}
+				toolInfos[i] = toolInfo
+			}
+			modelLogger.Debug("🔍     Tools: [%s]", strings.Join(toolInfos, ", "))
+		} else if len(msg.Content) > 0 {
+			// Show content preview for non-empty messages
+			modelLogger.Debug("🔍     Content preview: %q", contentPreview)
+		}
+		// Skip logging entirely for empty content with no tools
 	}
 
 	// Transform tools

@@ -82,7 +82,7 @@ func TestMultiEditFallbackSchema(t *testing.T) {
 
 // TestMultiEditValidation tests MultiEdit tool call validation
 func TestMultiEditValidation(t *testing.T) {
-	service := correction.NewService("http://test", "test-key", true, "test-model", false)
+	service := correction.NewService(NewMockConfigProvider("http://test"), "test-key", true, "test-model", false)
 	ctx := context.WithValue(context.Background(), internal.RequestIDKey, "test-req")
 	
 	// Get fallback schema for MultiEdit
@@ -203,7 +203,7 @@ func TestMultiEditValidation(t *testing.T) {
 
 // TestMultiEditRuleBasedCorrection tests rule-based parameter corrections for MultiEdit
 func TestMultiEditRuleBasedCorrection(t *testing.T) {
-	service := correction.NewService("http://test", "test-key", true, "test-model", false)
+	service := correction.NewService(NewMockConfigProvider("http://test"), "test-key", true, "test-model", false)
 	ctx := context.WithValue(context.Background(), internal.RequestIDKey, "test-req")
 	
 	tests := []struct {
@@ -337,7 +337,7 @@ func TestMultiEditRuleBasedCorrection(t *testing.T) {
 
 // TestMultiEditMalformedStructureCorrection tests correction of malformed MultiEdit calls like the original error
 func TestMultiEditMalformedStructureCorrection(t *testing.T) {
-	service := correction.NewService("http://test", "test-key", true, "test-model", false)
+	service := correction.NewService(NewMockConfigProvider("http://test"), "test-key", true, "test-model", false)
 	ctx := context.WithValue(context.Background(), internal.RequestIDKey, "test-req")
 	
 	// Get fallback schema
@@ -412,4 +412,358 @@ func TestMultiEditMalformedStructureCorrection(t *testing.T) {
 			t.Errorf("Expected 'unexpected_param' in invalid parameters, got: %v", result.InvalidParams)
 		}
 	})
+}
+
+// TestMultiEditStructuralCorrection tests correction of MultiEdit calls where file_path is incorrectly nested in edits
+func TestMultiEditStructuralCorrection(t *testing.T) {
+	service := correction.NewService(NewMockConfigProvider("http://test"), "test-key", true, "test-model", false)
+	ctx := context.WithValue(context.Background(), internal.RequestIDKey, "test-req")
+	
+	// Get fallback schema
+	fallbackSchema := types.GetFallbackToolSchema("MultiEdit")
+	if fallbackSchema == nil {
+		t.Fatal("MultiEdit fallback schema required for this test")
+	}
+	availableTools := []types.Tool{*fallbackSchema}
+	
+	tests := []struct {
+		name          string
+		input         types.Content
+		expectFixed   bool
+		expectedPath  string
+		expectedEdits []map[string]interface{}
+	}{
+		{
+			name: "file_path nested in edits - should be extracted to top level",
+			input: types.Content{
+				Type: "tool_use",
+				ID:   "test-nested",
+				Name: "MultiEdit",
+				Input: map[string]interface{}{
+					"file_path": "/project/main.go",  // This should remain
+					"edits": []interface{}{
+						map[string]interface{}{
+							"file_path":  "/project/other.go",  // This should be removed
+							"old_string": "package main",
+							"new_string": "package main",
+						},
+						map[string]interface{}{
+							"file_path":  "/project/helper.go",  // This should be removed too
+							"old_string": "func helper() {", 
+							"new_string": "func helper() {",
+						},
+					},
+				},
+			},
+			expectFixed:  true,
+			expectedPath: "/project/main.go",  // Should keep top-level path
+			expectedEdits: []map[string]interface{}{
+				{
+					"old_string": "package main",
+					"new_string": "package main",
+				},
+				{
+					"old_string": "func helper() {",
+					"new_string": "func helper() {", 
+				},
+			},
+		},
+		{
+			name: "file_path only in edits - should be extracted to top level",
+			input: types.Content{
+				Type: "tool_use",
+				ID:   "test-extract",
+				Name: "MultiEdit",
+				Input: map[string]interface{}{
+					"edits": []interface{}{
+						map[string]interface{}{
+							"file_path":  "/project/source.go",  // Should become top-level
+							"old_string": "import \"fmt\"",
+							"new_string": "import \"fmt\"",
+						},
+						map[string]interface{}{
+							"file_path":  "/project/source.go",  // Same path, should be removed
+							"old_string": "func main() {",
+							"new_string": "func main() {",
+						},
+					},
+				},
+			},
+			expectFixed:  true,
+			expectedPath: "/project/source.go",  // Extracted from edits
+			expectedEdits: []map[string]interface{}{
+				{
+					"old_string": "import \"fmt\"",
+					"new_string": "import \"fmt\"",
+				},
+				{
+					"old_string": "func main() {",
+					"new_string": "func main() {",
+				},
+			},
+		},
+		{
+			name: "Anonymized real log example - matches actual failure case",
+			input: types.Content{
+				Type: "tool_use", 
+				ID:   "test-real-case",
+				Name: "MultiEdit",
+				Input: map[string]interface{}{
+					"file_path": "/test/project/handlers.go",
+					"edits": []interface{}{
+						map[string]interface{}{
+							"file_path":  "/test/project/handlers.go",
+							"old_string": "func handleRequest() {",
+							"new_string": "func handleRequest() {",
+						},
+						map[string]interface{}{
+							"file_path":  "/test/project/service.go",
+							"old_string": "func processData() error {",
+							"new_string": "func processData() error {",
+						},
+					},
+				},
+			},
+			expectFixed:  true,
+			expectedPath: "/test/project/handlers.go",  // Keep top-level
+			expectedEdits: []map[string]interface{}{
+				{
+					"old_string": "func handleRequest() {",
+					"new_string": "func handleRequest() {",
+				},
+				{
+					"old_string": "func processData() error {",
+					"new_string": "func processData() error {",
+				},
+			},
+		},
+		{
+			name: "Multiple file parameter variations - should remove all",
+			input: types.Content{
+				Type: "tool_use",
+				ID:   "test-variations",
+				Name: "MultiEdit",
+				Input: map[string]interface{}{
+					"file_path": "/project/main.go",  // Correct top-level
+					"edits": []interface{}{
+						map[string]interface{}{
+							"filename":   "/project/file1.go",  // Wrong variation 1
+							"old_string": "package main",
+							"new_string": "package main",
+						},
+						map[string]interface{}{
+							"filepath":   "/project/file2.go",  // Wrong variation 2
+							"old_string": "import \"fmt\"",
+							"new_string": "import \"fmt\"",
+						},
+						map[string]interface{}{
+							"path":       "/project/file3.go",  // Wrong variation 3
+							"old_string": "func test() {",
+							"new_string": "func test() {",
+						},
+					},
+				},
+			},
+			expectFixed:  true,
+			expectedPath: "/project/main.go",
+			expectedEdits: []map[string]interface{}{
+				{
+					"old_string": "package main",
+					"new_string": "package main",
+				},
+				{
+					"old_string": "import \"fmt\"",
+					"new_string": "import \"fmt\"",
+				},
+				{
+					"old_string": "func test() {",
+					"new_string": "func test() {",
+				},
+			},
+		},
+		{
+			name: "Edit with only file_path parameter - should be discarded",
+			input: types.Content{
+				Type: "tool_use",
+				ID:   "test-discard-empty",
+				Name: "MultiEdit",
+				Input: map[string]interface{}{
+					"file_path": "/project/main.go",
+					"edits": []interface{}{
+						map[string]interface{}{
+							"old_string": "package main",
+							"new_string": "package main",
+						},
+						map[string]interface{}{
+							"file_path": "/project/other.go",  // Only has file_path, no old_string/new_string
+						},
+						map[string]interface{}{
+							"old_string": "import \"fmt\"",
+							"new_string": "import \"fmt\"",
+							"file_path":  "/project/helper.go",  // Has required params + file_path
+						},
+					},
+				},
+			},
+			expectFixed:  true,
+			expectedPath: "/project/main.go",
+			expectedEdits: []map[string]interface{}{
+				{
+					"old_string": "package main",
+					"new_string": "package main",
+				},
+				{
+					"old_string": "import \"fmt\"",
+					"new_string": "import \"fmt\"",
+				},
+			},
+		},
+		{
+			name: "Edit becomes empty after removing file_path - should be discarded (real log case)",
+			input: types.Content{
+				Type: "tool_use",
+				ID:   "test-real-empty-case", 
+				Name: "MultiEdit",
+				Input: map[string]interface{}{
+					"file_path": "/project/handlers_test.go",
+					"edits": []interface{}{
+						map[string]interface{}{
+							"old_string": "func TestInstallApp() {",
+							"new_string": "func TestInstallApp() {",
+						},
+						map[string]interface{}{
+							"old_string": "func executeInstallAppRequest() {",
+							"new_string": "func executeInstallAppRequest() {",
+						},
+						map[string]interface{}{
+							"file_path": "/project/handlers_test.go",  // Only file_path - becomes empty after removal
+						},
+					},
+				},
+			},
+			expectFixed:  true,
+			expectedPath: "/project/handlers_test.go",
+			expectedEdits: []map[string]interface{}{
+				{
+					"old_string": "func TestInstallApp() {",
+					"new_string": "func TestInstallApp() {",
+				},
+				{
+					"old_string": "func executeInstallAppRequest() {",
+					"new_string": "func executeInstallAppRequest() {",
+				},
+			},
+		},
+		{
+			name: "All edits only have file_path - correction should fail",
+			input: types.Content{
+				Type: "tool_use",
+				ID:   "test-all-invalid",
+				Name: "MultiEdit",
+				Input: map[string]interface{}{
+					"file_path": "/project/main.go",
+					"edits": []interface{}{
+						map[string]interface{}{
+							"file_path": "/project/file1.go",  // Only file_path
+						},
+						map[string]interface{}{
+							"file_path": "/project/file2.go",  // Only file_path
+						},
+					},
+				},
+			},
+			expectFixed: false,  // Should fail because no valid edits remain
+		},
+		{
+			name: "Already correct structure - no changes needed",
+			input: types.Content{
+				Type: "tool_use",
+				ID:   "test-correct",
+				Name: "MultiEdit",
+				Input: map[string]interface{}{
+					"file_path": "/project/main.go",
+					"edits": []interface{}{
+						map[string]interface{}{
+							"old_string": "package main",
+							"new_string": "package main", 
+						},
+					},
+				},
+			},
+			expectFixed: false,  // No correction needed
+		},
+	}
+	
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// First, verify the input is invalid (for cases that should be fixed)
+			if tt.expectFixed {
+				validation := service.ValidateToolCall(ctx, tt.input, availableTools)
+				if validation.IsValid {
+					t.Errorf("Expected input to be invalid, but validation passed")
+				}
+				// Verify we detected structural issues with nested file/path parameters
+				if len(validation.InvalidParams) == 0 {
+					t.Errorf("Expected validation to detect invalid nested parameters, got none")
+				}
+			}
+			
+			// Attempt the rule-based correction
+			result, fixed := service.AttemptRuleBasedMultiEditCorrection(ctx, tt.input)
+			
+			if fixed != tt.expectFixed {
+				t.Errorf("Expected fixed=%v, got %v", tt.expectFixed, fixed)
+			}
+			
+			if tt.expectFixed {
+				// Verify the corrected structure
+				if actualPath, exists := result.Input["file_path"]; !exists {
+					t.Error("Expected file_path parameter in corrected result")
+				} else if actualPath != tt.expectedPath {
+					t.Errorf("Expected file_path=%s, got %s", tt.expectedPath, actualPath)
+				}
+				
+				if actualEdits, exists := result.Input["edits"]; !exists {
+					t.Error("Expected edits parameter in corrected result")
+				} else {
+					editsArray, ok := actualEdits.([]interface{})
+					if !ok {
+						t.Error("Expected edits to be an array")
+					} else if len(editsArray) != len(tt.expectedEdits) {
+						t.Errorf("Expected %d edits, got %d", len(tt.expectedEdits), len(editsArray))
+					} else {
+						// Check each edit doesn't have file_path
+						for i, edit := range editsArray {
+							editMap, ok := edit.(map[string]interface{})
+							if !ok {
+								t.Errorf("Edit %d is not a map", i)
+								continue
+							}
+							if _, hasFilePath := editMap["file_path"]; hasFilePath {
+								t.Errorf("Edit %d still has file_path parameter - correction failed", i)
+							}
+							// Verify expected content
+							if i < len(tt.expectedEdits) {
+								expected := tt.expectedEdits[i]
+								for key, expectedValue := range expected {
+									if actualValue, exists := editMap[key]; !exists {
+										t.Errorf("Edit %d missing expected key %s", i, key)
+									} else if actualValue != expectedValue {
+										t.Errorf("Edit %d key %s: expected %v, got %v", i, key, expectedValue, actualValue)
+									}
+								}
+							}
+						}
+					}
+				}
+				
+				// Verify the corrected call passes validation  
+				validation := service.ValidateToolCall(ctx, result, availableTools)
+				if !validation.IsValid {
+					t.Errorf("Corrected call failed validation. Missing: %v, Invalid: %v", 
+						validation.MissingParams, validation.InvalidParams)
+				}
+			}
+		})
+	}
 }

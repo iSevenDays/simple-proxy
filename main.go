@@ -19,9 +19,9 @@ func main() {
 
 	log.Printf("🚀 Starting Claude Code Proxy...")
 	log.Printf("🛠️ Tool correction: %v", cfg.ToolCorrectionEnabled)
-	log.Printf("🤖 BIG_MODEL: %s → %s", cfg.BigModel, cfg.BigModelEndpoint)
-	log.Printf("🤖 SMALL_MODEL: %s → %s", cfg.SmallModel, cfg.SmallModelEndpoint)
-	log.Printf("🤖 CORRECTION_MODEL: %s → %s", cfg.CorrectionModel, cfg.ToolCorrectionEndpoint)
+	log.Printf("🤖 BIG_MODEL: %s → %v (%d endpoints)", cfg.BigModel, cfg.BigModelEndpoints, len(cfg.BigModelEndpoints))
+	log.Printf("🤖 SMALL_MODEL: %s → %v (%d endpoints)", cfg.SmallModel, cfg.SmallModelEndpoints, len(cfg.SmallModelEndpoints))
+	log.Printf("🤖 CORRECTION_MODEL: %s → %v (%d endpoints)", cfg.CorrectionModel, cfg.ToolCorrectionEndpoints, len(cfg.ToolCorrectionEndpoints))
 	log.Printf("🌐 Listening on port: %s", cfg.Port)
 
 	// Initialize conversation logger if enabled

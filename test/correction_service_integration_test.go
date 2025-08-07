@@ -15,8 +15,9 @@ func TestCorrectionService_WithInjectedValidator(t *testing.T) {
 	validator := types.NewStandardToolValidator()
 	
 	// This should fail initially - NewServiceWithValidator doesn't exist yet
+	mockConfig := NewMockConfigProvider("http://test:8080")
 	service := correction.NewServiceWithValidator(
-		"http://test:8080",
+		mockConfig,
 		"test-key",
 		true,
 		"test-model",
@@ -50,8 +51,9 @@ func TestCorrectionService_UsesInjectedValidator(t *testing.T) {
 	}
 	
 	// This should fail initially - NewServiceWithValidator doesn't exist yet
+	mockConfig2 := NewMockConfigProvider("http://test:8080")
 	service := correction.NewServiceWithValidator(
-		"http://test:8080",
+		mockConfig2,
 		"test-key",
 		true,
 		"test-model",
@@ -98,8 +100,9 @@ func TestCorrectionService_UsesInjectedValidator(t *testing.T) {
 // TestCorrectionService_BackwardCompatibility tests that existing constructor still works
 func TestCorrectionService_BackwardCompatibility(t *testing.T) {
 	// Existing constructor should still work and use StandardToolValidator internally
+	mockConfig3 := NewMockConfigProvider("http://test:8080")
 	service := correction.NewService(
-		"http://test:8080",
+		mockConfig3,
 		"test-key",
 		true,
 		"test-model",
@@ -140,8 +143,9 @@ func TestCorrectionService_BackwardCompatibility(t *testing.T) {
 // TestCorrectionService_ValidatorIntegration_ToolNameNormalization tests tool name normalization integration
 func TestCorrectionService_ValidatorIntegration_ToolNameNormalization(t *testing.T) {
 	validator := types.NewStandardToolValidator()
+	mockConfig4 := NewMockConfigProvider("http://test:8080")
 	service := correction.NewServiceWithValidator(
-		"http://test:8080",
+		mockConfig4,
 		"test-key",
 		true,
 		"test-model",
@@ -188,8 +192,9 @@ func TestCorrectionService_ValidatorIntegration_ToolNameNormalization(t *testing
 // TestCorrectionService_ValidatorIntegration_ParameterValidation tests parameter validation integration
 func TestCorrectionService_ValidatorIntegration_ParameterValidation(t *testing.T) {
 	validator := types.NewStandardToolValidator()
+	mockConfig5 := NewMockConfigProvider("http://test:8080")
 	service := correction.NewServiceWithValidator(
-		"http://test:8080",
+		mockConfig5,
 		"test-key",
 		true,
 		"test-model",

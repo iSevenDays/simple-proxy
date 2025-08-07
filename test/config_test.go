@@ -80,8 +80,10 @@ CORRECTION_MODEL=qwen2.5-coder:latest`,
 			}
 
 			require.NoError(t, err)
-			assert.Equal(t, tt.expectedBig, cfg.BigModelEndpoint)
-			assert.Equal(t, tt.expectedSmall, cfg.SmallModelEndpoint)
+			require.Len(t, cfg.BigModelEndpoints, 1)
+			require.Len(t, cfg.SmallModelEndpoints, 1)
+			assert.Equal(t, tt.expectedBig, cfg.BigModelEndpoints[0])
+			assert.Equal(t, tt.expectedSmall, cfg.SmallModelEndpoints[0])
 			assert.Equal(t, "3456", cfg.Port)
 			assert.True(t, cfg.ToolCorrectionEnabled)
 		})
@@ -92,9 +94,9 @@ CORRECTION_MODEL=qwen2.5-coder:latest`,
 func TestDefaultConfig(t *testing.T) {
 	cfg := config.GetDefaultConfig()
 
-	assert.Equal(t, "", cfg.BigModelEndpoint)         // Empty until set from .env
-	assert.Equal(t, "", cfg.SmallModelEndpoint)       // Empty until set from .env
-	assert.Equal(t, "", cfg.ToolCorrectionEndpoint)   // Empty until set from .env
+	assert.Empty(t, cfg.BigModelEndpoints)         // Empty until set from .env
+	assert.Empty(t, cfg.SmallModelEndpoints)       // Empty until set from .env
+	assert.Empty(t, cfg.ToolCorrectionEndpoints)   // Empty until set from .env
 	assert.Equal(t, "3456", cfg.Port)
 	assert.True(t, cfg.ToolCorrectionEnabled)
 	assert.False(t, cfg.DisableSmallModelLogging) // Enabled by default (normal logging)

@@ -36,37 +36,58 @@ func getInputParamNames(input map[string]interface{}) []string {
 	return names
 }
 
+// ConfigProvider provides endpoint configuration for the correction service
+type ConfigProvider interface {
+	GetToolCorrectionEndpoint() string
+}
+
 // Service handles tool call correction using configurable model
 type Service struct {
-	endpoint      string
+	config        ConfigProvider
 	apiKey        string
 	enabled       bool
 	modelName     string // Configurable model for corrections
 	disableLogging bool   // Disable tool correction logging
 	validator     types.ToolValidator // Injected tool validator
+	registry      types.SchemaRegistry // Injected schema registry
 }
 
-// NewService creates a new tool correction service with default StandardToolValidator
-func NewService(endpoint, apiKey string, enabled bool, modelName string, disableLogging bool) *Service {
+// NewService creates a new tool correction service with default components
+func NewService(config ConfigProvider, apiKey string, enabled bool, modelName string, disableLogging bool) *Service {
 	return &Service{
-		endpoint:       endpoint,
+		config:         config,
 		apiKey:         apiKey,
 		enabled:        enabled,
 		modelName:      modelName,
 		disableLogging: disableLogging,
 		validator:      types.NewStandardToolValidator(), // Default validator for backward compatibility
+		registry:       types.NewStandardSchemaRegistry(), // Default registry for backward compatibility
 	}
 }
 
 // NewServiceWithValidator creates a new tool correction service with custom validator
-func NewServiceWithValidator(endpoint, apiKey string, enabled bool, modelName string, disableLogging bool, validator types.ToolValidator) *Service {
+func NewServiceWithValidator(config ConfigProvider, apiKey string, enabled bool, modelName string, disableLogging bool, validator types.ToolValidator) *Service {
 	return &Service{
-		endpoint:       endpoint,
+		config:         config,
 		apiKey:         apiKey,
 		enabled:        enabled,
 		modelName:      modelName,
 		disableLogging: disableLogging,
 		validator:      validator,
+		registry:       types.NewStandardSchemaRegistry(), // Default registry
+	}
+}
+
+// NewServiceWithComponents creates a new tool correction service with custom components
+func NewServiceWithComponents(config ConfigProvider, apiKey string, enabled bool, modelName string, disableLogging bool, validator types.ToolValidator, registry types.SchemaRegistry) *Service {
+	return &Service{
+		config:         config,
+		apiKey:         apiKey,
+		enabled:        enabled,
+		modelName:      modelName,
+		disableLogging: disableLogging,
+		validator:      validator,
+		registry:       registry,
 	}
 }
 
@@ -278,6 +299,33 @@ func (s *Service) CorrectToolCalls(ctx context.Context, toolCalls []types.Conten
 				} else {
 					if s.shouldLog() {
 						log.Printf("⚠️[%s] Rule-based correction failed validation, falling back to LLM", requestID)
+					}
+					// Update currentCall to the rule-based attempt for LLM correction
+					currentCall = ruleBasedCall
+					validation = ruleValidation
+				}
+			}
+		}
+
+		// Stage 1.7: Try rule-based MultiEdit correction before LLM
+		if currentCall.Name == "MultiEdit" {
+			if ruleBasedCall, success := s.AttemptRuleBasedMultiEditCorrection(ctx, currentCall); success {
+				if s.shouldLog() {
+					log.Printf("🔧[%s] Rule-based MultiEdit correction successful", requestID)
+					log.Printf("🔧[%s] Rule-based corrected: %+v", requestID, ruleBasedCall.Input)
+				}
+				
+				// Re-validate rule-based correction
+				ruleValidation := s.ValidateToolCall(ctx, ruleBasedCall, availableTools)
+				if ruleValidation.IsValid {
+					if s.shouldLog() {
+						log.Printf("✅[%s] Rule-based MultiEdit correction passed validation", requestID)
+					}
+					correctedCalls = append(correctedCalls, ruleBasedCall)
+					break // Exit retry loop - success
+				} else {
+					if s.shouldLog() {
+						log.Printf("⚠️[%s] Rule-based MultiEdit correction failed validation, falling back to LLM", requestID)
 					}
 					// Update currentCall to the rule-based attempt for LLM correction
 					currentCall = ruleBasedCall
@@ -518,11 +566,11 @@ func (s *Service) ValidateToolCall(ctx context.Context, call types.Content, avai
 				return s.correctSlashCommandToTask(ctx, call, availableTools)
 			}
 			
-			// Try fallback schema for Claude Code built-in tools
-			if fallbackTool := types.GetFallbackToolSchema(call.Name); fallbackTool != nil {
-				tool = fallbackTool
+			// Try registry for schema lookup
+			if registryTool, exists := s.registry.GetSchema(call.Name); exists {
+				tool = registryTool
 				if s.shouldLog() {
-					log.Printf("🔧[%s] Using fallback schema for Claude Code tool: %s", requestID, call.Name)
+					log.Printf("🔧[%s] Using registry schema for tool: %s", requestID, call.Name)
 				}
 			} else {
 				if s.shouldLog() {
@@ -572,6 +620,32 @@ func (s *Service) ValidateToolCall(ctx context.Context, call types.Content, avai
 			for _, invalid := range result.InvalidParams {
 				if value, exists := call.Input[invalid]; exists {
 					log.Printf("🔍[%s] TodoWrite invalid param '%s' = %v (type: %T)", requestID, invalid, value, value)
+				}
+			}
+		}
+	}
+
+	// MultiEdit structural validation: Check for file/path parameters nested in edits
+	// (Run this regardless of basic validation result to catch structural issues)
+	if call.Name == "MultiEdit" {
+		if editsValue, hasEdits := call.Input["edits"]; hasEdits {
+			if editsArray, ok := editsValue.([]interface{}); ok {
+				// Common file path parameter variations that shouldn't appear in individual edits
+				invalidNestedParams := []string{"file_path", "filepath", "filename", "path", "file", "target_path", "source_path"}
+				
+				for i, edit := range editsArray {
+					if editMap, ok := edit.(map[string]interface{}); ok {
+						for _, paramName := range invalidNestedParams {
+							if _, hasParam := editMap[paramName]; hasParam {
+								// Found file/path parameter nested in edit - this is a structural violation
+								result.InvalidParams = append(result.InvalidParams, paramName)
+								result.IsValid = false
+								if s.shouldLog() {
+									log.Printf("❌[%s] MultiEdit structural violation: %s found in edit %d (should only be at top level)", requestID, paramName, i)
+								}
+							}
+						}
+					}
 				}
 			}
 		}
@@ -816,7 +890,8 @@ func (s *Service) sendCorrectionRequest(req types.OpenAIRequest) (*types.OpenAIR
 		return nil, err
 	}
 
-	httpReq, err := http.NewRequest("POST", s.endpoint, bytes.NewBuffer(reqBody))
+	endpoint := s.config.GetToolCorrectionEndpoint()
+	httpReq, err := http.NewRequest("POST", endpoint, bytes.NewBuffer(reqBody))
 	if err != nil {
 		return nil, err
 	}
@@ -1066,9 +1141,13 @@ func (s *Service) AttemptRuleBasedTodoWriteCorrection(ctx context.Context, call 
 						
 						// Extract other fields with defaults
 						status := "pending"
-						if s, exists := todoMap["status"]; exists {
-							if sStr, ok := s.(string); ok && isValidStatus(sStr) {
+						if statusValue, exists := todoMap["status"]; exists {
+							if sStr, ok := statusValue.(string); ok && isValidStatus(sStr) {
 								status = sStr
+							}
+						} else {
+							if s.shouldLog() {
+								log.Printf("🔧[%s] Added missing 'status': %s", requestID, status)
 							}
 						}
 						
@@ -1273,6 +1352,173 @@ func (s *Service) AttemptRuleBasedTodoWriteCorrection(ctx context.Context, call 
 		log.Printf("⚠️[%s] Rule-based correction failed: no valid todos could be generated", requestID)
 	}
 	return call, false
+}
+
+// AttemptRuleBasedMultiEditCorrection tries to fix MultiEdit calls with structural issues like file_path nested in edits
+func (s *Service) AttemptRuleBasedMultiEditCorrection(ctx context.Context, call types.Content) (types.Content, bool) {
+	requestID := getRequestID(ctx)
+	
+	if call.Name != "MultiEdit" || call.Type != "tool_use" {
+		return call, false
+	}
+	
+	if s.shouldLog() {
+		log.Printf("🔧[%s] Attempting rule-based MultiEdit correction", requestID)
+		log.Printf("🔧[%s] Input parameters: %+v", requestID, call.Input)
+	}
+	
+	// Create a copy of the input to avoid modifying the original
+	correctedInput := make(map[string]interface{})
+	for key, value := range call.Input {
+		correctedInput[key] = value
+	}
+	
+	// Check if we have edits parameter
+	editsValue, hasEdits := correctedInput["edits"]
+	if !hasEdits {
+		if s.shouldLog() {
+			log.Printf("🔧[%s] No edits parameter found, no structural correction needed", requestID)
+		}
+		return call, false
+	}
+	
+	editsArray, ok := editsValue.([]interface{})
+	if !ok {
+		if s.shouldLog() {
+			log.Printf("🔧[%s] Edits parameter is not an array, cannot correct", requestID)
+		}
+		return call, false
+	}
+	
+	// Check if any edit has file/path parameters (this is the structural issue we're fixing)
+	needsCorrection := false
+	extractedFilePath := ""
+	invalidNestedParams := []string{"file_path", "filepath", "filename", "path", "file", "target_path", "source_path"}
+	
+	for i, edit := range editsArray {
+		if editMap, ok := edit.(map[string]interface{}); ok {
+			for _, paramName := range invalidNestedParams {
+				if pathValue, hasParam := editMap[paramName]; hasParam {
+					needsCorrection = true
+					if pathStr, ok := pathValue.(string); ok && pathStr != "" && extractedFilePath == "" {
+						extractedFilePath = pathStr
+						if s.shouldLog() {
+							log.Printf("🔧[%s] Found %s in edit %d: %s", requestID, paramName, i, pathStr)
+						}
+					}
+				}
+			}
+		}
+	}
+	
+	if !needsCorrection {
+		if s.shouldLog() {
+			log.Printf("🔧[%s] No file/path parameters found in edits, no structural correction needed", requestID)
+		}
+		return call, false
+	}
+	
+	if s.shouldLog() {
+		log.Printf("🔧[%s] Detected structural issue: file/path parameters nested in edits", requestID)
+	}
+	
+	// Fix the structure: remove all file/path parameters from individual edits
+	var correctedEdits []interface{}
+	removedParams := []string{}
+	
+	for i, edit := range editsArray {
+		if editMap, ok := edit.(map[string]interface{}); ok {
+			// Create new edit map without any file/path parameters
+			correctedEdit := make(map[string]interface{})
+			for key, value := range editMap {
+				// Check if this key is a file/path parameter that should be removed
+				shouldRemove := false
+				for _, invalidParam := range invalidNestedParams {
+					if key == invalidParam {
+						shouldRemove = true
+						if !contains(removedParams, key) {
+							removedParams = append(removedParams, key)
+						}
+						break
+					}
+				}
+				if !shouldRemove {
+					correctedEdit[key] = value
+				}
+			}
+			
+			// Only include the edit if it has the required parameters (old_string, new_string)
+			if hasRequiredEditParams(correctedEdit) {
+				correctedEdits = append(correctedEdits, correctedEdit)
+			} else {
+				if s.shouldLog() {
+					log.Printf("⚠️[%s] Discarding edit %d after correction - missing required parameters", requestID, i)
+				}
+			}
+		} else {
+			// Keep non-map edits as-is (though this is unusual for MultiEdit)
+			correctedEdits = append(correctedEdits, edit)
+		}
+	}
+	
+	// Ensure we have valid edits remaining after correction
+	if len(correctedEdits) == 0 {
+		if s.shouldLog() {
+			log.Printf("❌[%s] No valid edits remaining after structural correction", requestID)
+		}
+		return call, false
+	}
+	
+	// Update the corrected input
+	correctedInput["edits"] = correctedEdits
+	
+	// Ensure top-level file_path exists
+	if _, hasTopLevelFilePath := correctedInput["file_path"]; !hasTopLevelFilePath {
+		if extractedFilePath != "" {
+			correctedInput["file_path"] = extractedFilePath
+			if s.shouldLog() {
+				log.Printf("🔧[%s] Extracted file_path to top level: %s", requestID, extractedFilePath)
+			}
+		} else {
+			if s.shouldLog() {
+				log.Printf("⚠️[%s] Could not extract valid file_path from edits", requestID)
+			}
+			return call, false
+		}
+	}
+	
+	// Create the corrected call
+	correctedCall := types.Content{
+		Type:  call.Type,
+		ID:    call.ID,
+		Name:  call.Name,
+		Input: correctedInput,
+	}
+	
+	if s.shouldLog() {
+		log.Printf("✅[%s] MultiEdit structural correction successful", requestID)
+		log.Printf("🔧[%s] Removed parameters %v from %d edit objects", requestID, removedParams, len(editsArray))
+	}
+	
+	return correctedCall, true
+}
+
+// contains checks if a string slice contains a specific string
+func contains(slice []string, item string) bool {
+	for _, s := range slice {
+		if s == item {
+			return true
+		}
+	}
+	return false
+}
+
+// hasRequiredEditParams checks if an edit has the minimum required parameters for MultiEdit
+func hasRequiredEditParams(edit map[string]interface{}) bool {
+	// For MultiEdit, each edit needs at least old_string and new_string
+	_, hasOld := edit["old_string"]
+	_, hasNew := edit["new_string"]
+	return hasOld && hasNew
 }
 
 // GenerateTodoID creates a valid ID from todo content

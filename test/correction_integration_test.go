@@ -14,7 +14,8 @@ import (
 // TestSlashCommandIntegration tests the complete slash command correction flow
 // Following SPARC: End-to-end integration testing for slash command correction
 func TestSlashCommandIntegration(t *testing.T) {
-	service := correction.NewService("http://test.com", "test-key", true, "test-model", false)
+	mockConfig := NewMockConfigProvider("http://test.com")
+	service := correction.NewService(mockConfig, "test-key", true, "test-model", false)
 
 	// Define Task tool schema
 	taskToolSchema := types.Tool{

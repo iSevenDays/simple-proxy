@@ -30,7 +30,7 @@ func NewHandler(cfg *config.Config, conversationLogger *logger.ConversationLogge
 	return &Handler{
 		config: cfg,
 		correctionService: correction.NewService(
-			cfg.ToolCorrectionEndpoint,
+			cfg,
 			cfg.ToolCorrectionAPIKey,
 			cfg.ToolCorrectionEnabled,
 			cfg.CorrectionModel,
@@ -340,15 +340,15 @@ func (h *Handler) HandleAnthropicRequest(w http.ResponseWriter, r *http.Request)
 // mapModelName is now handled by config.MapModelName() method
 // This function has been removed in favor of configurable model mapping
 
-// selectProvider determines which endpoint to use based on mapped model
+// selectProvider determines which endpoint to use based on mapped model with failover support
 func (h *Handler) selectProvider(mappedModel string) (endpoint, apiKey string) {
 	// Route based on configured SMALL_MODEL to small model endpoint
 	if mappedModel == h.config.SmallModel {
-		return h.config.SmallModelEndpoint, h.config.SmallModelAPIKey
+		return h.config.GetSmallModelEndpoint(), h.config.SmallModelAPIKey
 	}
 
 	// Default to big model endpoint for BIG_MODEL and others
-	return h.config.BigModelEndpoint, h.config.BigModelAPIKey
+	return h.config.GetBigModelEndpoint(), h.config.BigModelAPIKey
 }
 
 // proxyToProviderEndpoint sends the OpenAI request to a specific provider endpoint

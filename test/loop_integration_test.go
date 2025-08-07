@@ -16,10 +16,10 @@ func TestLoopDetectionIntegration_TodoWriteLoop(t *testing.T) {
 	// Create a minimal config for testing
 	cfg := &config.Config{
 		BigModel:              "test-model",
-		BigModelEndpoint:      "http://localhost/v1/completions",
+		BigModelEndpoints:      []string{"http://localhost/v1/completions"},
 		BigModelAPIKey:        "test-key",
 		SmallModel:            "test-small-model",
-		SmallModelEndpoint:    "http://localhost/v1/completions",
+		SmallModelEndpoints:    []string{"http://localhost/v1/completions"},
 		SmallModelAPIKey:      "test-key",
 		ToolCorrectionEnabled: false, // Disable to focus on loop detection
 	}
@@ -116,10 +116,10 @@ func TestLoopDetectionIntegration_NoLoop(t *testing.T) {
 	// Create a minimal config for testing  
 	cfg := &config.Config{
 		BigModel:              "test-model",
-		BigModelEndpoint:      "http://localhost/v1/completions",
+		BigModelEndpoints:      []string{"http://localhost/v1/completions"},
 		BigModelAPIKey:        "test-key",
 		SmallModel:            "test-small-model",
-		SmallModelEndpoint:    "http://localhost/v1/completions",
+		SmallModelEndpoints:    []string{"http://localhost/v1/completions"},
 		SmallModelAPIKey:      "test-key",
 		ToolCorrectionEnabled: false,
 	}
@@ -170,10 +170,10 @@ func TestLoopDetectionIntegration_NoLoop(t *testing.T) {
 func TestLoopDetectionIntegration_ConsecutiveIdentical(t *testing.T) {
 	cfg := &config.Config{
 		BigModel:              "test-model",
-		BigModelEndpoint:      "http://localhost/v1/completions",
+		BigModelEndpoints:      []string{"http://localhost/v1/completions"},
 		BigModelAPIKey:        "test-key",
 		SmallModel:            "test-small-model",
-		SmallModelEndpoint:    "http://localhost/v1/completions",
+		SmallModelEndpoints:    []string{"http://localhost/v1/completions"},
 		SmallModelAPIKey:      "test-key",
 		ToolCorrectionEnabled: false,
 	}
