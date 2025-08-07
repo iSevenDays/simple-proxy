@@ -54,9 +54,30 @@ The Simple Proxy acts as a translation layer between Claude Code (Anthropic API 
 **Configuration Features:**
 - **Model Mapping**: Claude model names → Provider models
 - **Dual Provider Support**: Separate big/small model endpoints
+- **Multi-Endpoint Failover**: Comma-separated endpoint lists for correction services
+- **Circuit Breaker**: Configurable failure thresholds and backoff timing
 - **Tool Filtering**: Skip unwanted tools via `SKIP_TOOLS`
 - **Debug Options**: System message printing with `PRINT_SYSTEM_MESSAGE`
 - **Security**: API key masking in logs
+
+**Multi-Endpoint Configuration:**
+```bash
+# Single endpoint (legacy)
+TOOL_CORRECTION_ENDPOINT=http://192.168.0.46:11434/v1/chat/completions
+
+# Multiple endpoints with failover (new)
+TOOL_CORRECTION_ENDPOINT=http://192.168.0.46:11434/v1/chat/completions,http://192.168.0.50:11434/v1/chat/completions
+```
+
+**Circuit Breaker Configuration:**
+```go
+// Default circuit breaker settings
+CircuitBreaker: CircuitBreakerConfig{
+    FailureThreshold:   2,                // Open circuit after 2 failures
+    BackoffDuration:    30 * time.Second, // Base backoff time
+    MaxBackoffDuration: 10 * time.Minute, // Maximum backoff time
+}
+```
 
 ### 3. Request Transformation Pipeline
 
@@ -310,9 +331,111 @@ systemMessageOverrides:
   append: "Custom suffix content"
 ```
 
-### Tool Correction Service
+### Circuit Breaker & Endpoint Health System
 
-**Optimized Architecture:**
+**Problem Solved:**
+Prevents repeated delays from failing endpoints by implementing intelligent failover with exponential backoff. When endpoints consistently fail or timeout, the circuit breaker temporarily marks them as unhealthy to avoid wasting time on known-bad endpoints.
+
+**Architecture:**
+```
+┌─────────────────┐
+│ Correction      │
+│ Request         │
+└─────────┬───────┘
+          │
+          ▼
+┌─────────────────┐
+│ Endpoint        │
+│ Health Check    │
+│ • Failure Count │
+│ • Circuit State │
+│ • Retry Time    │
+└─────────┬───────┘
+          │
+      ┌───┴───┐
+      │Healthy│
+      │Endpoint  │ No   ┌─────────────────┐
+      │Available?│─────▶│ Exponential     │
+      └───┬───┘        │ Backoff Wait    │
+          │ Yes        │ • 30s base      │
+          ▼            │ • Max 10 mins   │
+┌─────────────────┐    └─────────────────┘
+│ Make Request    │
+│ to Selected     │
+│ Endpoint        │
+└─────────┬───────┘
+          │
+      ┌───┴───┐
+      │Request│ 
+      │Success?  │ No   ┌─────────────────┐
+      └───┬───┘  ─────▶│ Record Failure  │
+          │ Yes        │ • Increment     │
+          ▼            │ • Update Timer  │
+┌─────────────────┐    │ • Circuit Check │
+│ Record Success  │    └─────────────────┘
+│ • Reset Failures│
+│ • Close Circuit │
+└─────────────────┘
+```
+
+**Endpoint Health Tracking:**
+```go
+type EndpointHealth struct {
+    FailureCount   int           // Current consecutive failures
+    CircuitOpen    bool         // Circuit breaker state
+    NextRetryTime  time.Time    // When to retry unhealthy endpoint
+    LastFailure    time.Time    // Timestamp of last failure
+}
+```
+
+**Circuit Breaker Configuration:**
+```go
+type CircuitBreakerConfig struct {
+    FailureThreshold    int           // Failures before opening circuit (default: 2)
+    BackoffDuration     time.Duration // Base backoff time (default: 30s)
+    MaxBackoffDuration  time.Duration // Maximum backoff time (default: 10m)
+}
+```
+
+**Smart Endpoint Selection:**
+```
+┌─────────────────┐
+│ Multiple        │
+│ Endpoints       │
+│ Available       │
+└─────────┬───────┘
+          │
+          ▼
+┌─────────────────┐
+│ Health Check    │
+│ Each Endpoint   │
+└─────────┬───────┘
+          │
+      ┌───┴───┐
+      │Healthy│
+      │Endpoint    │ Yes  ┌─────────────────┐
+      │Found?      │─────▶│ Return Healthy  │
+      └───┬───┘          │ Endpoint        │
+          │ No           └─────────────────┘
+          ▼
+┌─────────────────┐
+│ Return First    │
+│ Endpoint        │
+│ (Last Resort)   │
+└─────────────────┘
+```
+
+**Key Features:**
+- **Failure Threshold**: Circuit opens after configurable failures (default: 2)
+- **Exponential Backoff**: Backoff time increases with consecutive failures
+- **Thread-Safe**: All health operations protected by `sync.RWMutex`
+- **Smart Selection**: `GetHealthyToolCorrectionEndpoint()` prefers healthy endpoints
+- **Automatic Recovery**: Successful requests reset failure counts and close circuits
+- **Graceful Fallback**: Returns endpoint even when all are marked unhealthy
+
+### Tool Correction Service with Multi-Endpoint Failover
+
+**Enhanced Architecture with Circuit Breaker:**
 ```
 ┌─────────────────┐
 │ Tool Calls      │
@@ -330,6 +453,14 @@ systemMessageOverrides:
   ────┤       ├────┐
       └───────┘    │
           │        ▼
+          │  ┌─────────────────┐
+          │  │ Get Healthy     │
+          │  │ Endpoint        │
+          │  │ • Circuit Check │
+          │  │ • Health Status │
+          │  └─────────┬───────┘
+          │            │
+          │            ▼
           │  ┌─────────────────┐
           │  │ Validation &    │
           │  │ Issue Detection │
@@ -353,16 +484,42 @@ systemMessageOverrides:
           │            │            ▼
           │            │  ┌─────────────────┐
           │            │  │ LLM Correction  │
-          │            │  │ (if needed)     │
+          │            │  │ with Failover   │
+          │            │  │ • Circuit Check │
+          │            │  │ • Retry Logic   │
           │            │  └─────────┬───────┘
           │            │            │
-          └────────────┼────────────┘
+          │            │        ┌───┴───┐
+          │            │        │Request│ 
+          │            │        │Success?  │
+          │            │        └───┬───┘
+          │            │            │
+          │            │    ┌───────┴───────┐
+          │            │ Yes│               │No
+          │            │    ▼               ▼
+          │            │ ┌─────────┐   ┌─────────┐
+          │            │ │ Record  │   │ Record  │
+          │            │ │ Success │   │ Failure │
+          │            │ └─────────┘   │ Try Next│
+          │            │               │Endpoint │
+          │            │               └─────────┘
+          │            │                    │
+          └────────────┼────────────────────┘
                        │
                        ▼
                 ┌─────────────────┐
                 │ Corrected Tool  │
                 │ Calls Output    │
                 └─────────────────┘
+```
+
+**Multi-Endpoint Configuration:**
+```go
+// Multiple correction endpoints with failover
+ToolCorrectionEndpoints: []string{
+    "http://192.168.0.46:11434/v1/chat/completions",  // Primary
+    "http://192.168.0.50:11434/v1/chat/completions",  // Failover
+}
 ```
 
 **Optimization Features:**
@@ -491,6 +648,10 @@ SMALL_MODEL_API_KEY=provider-api-key
 
 CORRECTION_MODEL=correction-model-name
 
+# Multi-Endpoint Failover Configuration
+TOOL_CORRECTION_ENDPOINT=http://192.168.0.46:11434/v1/chat/completions,http://192.168.0.50:11434/v1/chat/completions
+TOOL_CORRECTION_API_KEY=your-api-key
+
 # Optional Features
 SKIP_TOOLS=NotebookRead,NotebookEdit
 PRINT_SYSTEM_MESSAGE=true
@@ -546,6 +707,16 @@ Anthropic: {name, description, input_schema}
 - **📋 Debug**: System message printing (when enabled)
 - **✅ Responses**: Response processing and delivery
 - **⚠️ Warnings**: Non-fatal errors and fallbacks
+- **🏥 Circuit Breaker**: Endpoint health tracking and failover events
+- **🔄 Failover**: Endpoint switching and recovery notifications
+
+**Circuit Breaker Logging Examples:**
+```
+🏥[req_123] Circuit breaker: endpoint http://192.168.0.46:11434 failed (2/2 threshold)
+🏥[req_123] Circuit opened for endpoint http://192.168.0.46:11434, backoff: 30s
+🔄[req_123] Endpoint http://192.168.0.46:11434 unhealthy, trying http://192.168.0.50:11434
+✅[req_123] Circuit breaker: endpoint http://192.168.0.46:11434 recovered after success
+```
 
 ### Request Tracking
 
@@ -566,9 +737,11 @@ Anthropic: {name, description, input_schema}
 ### Error Handling Strategy
 
 - **Graceful Degradation**: Continue with defaults when possible
-- **Detailed Logging**: Comprehensive error context
-- **Fallback Mechanisms**: Original behavior when overrides fail
-- **Client-Friendly Responses**: Clean error messages to client
+- **Circuit Breaker Failover**: Automatic switching to healthy endpoints
+- **Exponential Backoff**: Prevent overwhelming of failed endpoints
+- **Detailed Logging**: Comprehensive error context with endpoint health status
+- **Fallback Mechanisms**: Original behavior when overrides fail, last-resort endpoint selection
+- **Client-Friendly Responses**: Clean error messages to client without exposing internal failover details
 
 ## Performance Considerations
 
@@ -578,6 +751,12 @@ Anthropic: {name, description, input_schema}
 - **Tool Filtering**: Reduce request size by filtering unwanted tools
 - **Streaming Support**: Efficient handling of streaming responses
 - **Context Reuse**: Efficient request context management
+- **Circuit Breaker Intelligence**: Prevent repeated failures and reduce latency
+  - **Failure avoidance**: Skip known-unhealthy endpoints immediately
+  - **Smart endpoint selection**: Prefer healthy endpoints for faster responses
+  - **Exponential backoff**: Intelligent retry timing prevents wasted requests
+  - **Automatic recovery**: Failed endpoints automatically return to service when healthy
+  - **Performance impact**: Eliminates 30-60 second delays from timeout retries
 - **Smart Tool Correction**: Pre-validation to skip unnecessary correction processing
   - **Text-only bypass**: Skip correction for responses without tool calls
   - **Valid tool bypass**: Skip correction for already-valid tool calls
@@ -594,9 +773,10 @@ Anthropic: {name, description, input_schema}
 ### Scalability
 
 - **Stateless Design**: No persistent state between requests
-- **Configurable Timeouts**: Reasonable timeout configurations
-- **Resource Management**: Proper cleanup of resources
-- **Concurrent Request Handling**: Go's native concurrency support
+- **Thread-Safe Circuit Breaker**: Concurrent endpoint health tracking with `sync.RWMutex`
+- **Configurable Timeouts**: Reasonable timeout configurations with intelligent backoff
+- **Resource Management**: Proper cleanup of resources and endpoint health state
+- **Concurrent Request Handling**: Go's native concurrency support with shared health tracking
 
 ## Security Architecture
 
