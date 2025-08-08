@@ -607,6 +607,154 @@ Reason:    Client/server separation requires local file access via Read tool
    Reason: Claude Code (client) and Simple Proxy (server) on different machines
 ```
 
+### ExitPlanMode Usage Validation System
+
+**Problem Solved:**
+Claude Code occasionally misuses the ExitPlanMode tool as a completion summary after implementation work, instead of using it for planning before implementation. This leads to confusing conversation flows where the tool is used to report finished work rather than outline upcoming work.
+
+**Architecture:**
+```
+┌─────────────────┐
+│ ExitPlanMode    │
+│ Tool Call       │
+└─────────┬───────┘
+          │
+          ▼
+┌─────────────────┐
+│ Conversation-   │
+│ Aware Content   │
+│ Analysis        │
+└─────────┬───────┘
+          │
+          ▼
+┌─────────────────┐
+│ Completion      │
+│ Indicators      │
+│ Detection       │
+│ (✅, "completed")│
+└─────────┬───────┘
+          │
+      ┌───┴───┐
+      │Found? │
+      └───┬───┘
+          │
+      ┌───┴───┐
+  No  │       │ Yes
+  ────┤       ├────┐
+      └───────┘    │
+          │        ▼
+          │  ┌─────────────────┐
+          │  │ Block with      │
+          │  │ Educational     │
+          │  │ Response        │
+          │  └─────────────────┘
+          │
+          ▼
+┌─────────────────┐
+│ Implementation  │
+│ Work Pattern    │
+│ Analysis        │
+└─────────┬───────┘
+          │
+      ┌───┴───┐
+      │ 3+    │
+      │Recent │ No   ┌─────────────────┐
+      │Tools? │─────▶│ Allow Usage     │
+      └───┬───┘      │ (Valid Planning)│
+          │ Yes      └─────────────────┘
+          ▼
+┌─────────────────┐
+│ Summary Content │
+│ Analysis        │
+│ (past tense,    │
+│ completion lang)│
+└─────────┬───────┘
+          │
+      ┌───┴───┐
+      │Summary│
+      │Content│ No   ┌─────────────────┐
+      │Found? │─────▶│ Allow Usage     │
+      └───┬───┘      │ (Valid Planning)│
+          │ Yes      └─────────────────┘
+          ▼
+┌─────────────────┐
+│ Block with      │
+│ Educational     │
+│ Response        │
+└─────────────────┘
+```
+
+**Conversation-Aware Analysis:**
+```go
+func (s *Service) ValidateExitPlanMode(ctx context.Context, call types.Content, messages []types.OpenAIMessage) (bool, string) {
+    // Check 1: Analyze plan content for completion indicators
+    if s.hasCompletionIndicators(call) {
+        return true, "post-completion summary"
+    }
+    
+    // Check 2: Only block based on implementation work if content suggests completion
+    implementationCount := s.countRecentImplementationWork(messages)
+    if implementationCount >= 3 && s.looksLikeSummaryContent(call) {
+        return true, "post-implementation usage"
+    }
+    
+    return false, ""
+}
+```
+
+**Key Features:**
+- **Content Analysis**: Detects completion indicators (✅, "completed successfully", "all tasks completed")
+- **Implementation Pattern Detection**: Counts recent implementation work (Write, Edit, Bash, TodoWrite, MultiEdit)
+- **Context-Aware Logic**: Only blocks when both implementation work AND summary content are present
+- **Educational Responses**: Explains proper ExitPlanMode usage when blocking
+- **Legitimate Planning Protection**: Allows valid planning scenarios even after previous work
+
+**Completion Indicators Detection:**
+```go
+completionPatterns := []string{
+    "✅", "☑", "✓",                           // Visual completion indicators
+    "completed successfully", "all tasks completed", "work is done",
+    "implementation finished", "ready for production", "tasks are complete",
+    "everything is working", "all functionality", "summary of changes",
+}
+```
+
+**Implementation Work Detection:**
+```go
+implementationTools := map[string]bool{
+    "Write": true, "Edit": true, "MultiEdit": true,
+    "Bash": true, "TodoWrite": true,
+    // Research tools NOT counted: Read, Grep, Glob, WebSearch, etc.
+}
+```
+
+**Educational Response Example:**
+```
+I understand you want to use ExitPlanMode, but this tool should only be used for 
+**planning before implementation**, not as a completion summary.
+
+**Issue detected**: post-completion summary
+
+**Proper ExitPlanMode usage:**
+- Use it BEFORE starting any implementation work
+- Use it to present a plan for user approval  
+- Use it when you need to outline steps you will take
+
+**Avoid using ExitPlanMode for:**
+- Summarizing completed work
+- Reporting finished tasks
+- Indicating that implementation is done
+
+Would you like me to help you with the next steps instead?
+```
+
+**Example Logs:**
+```
+🚫[req_123] ExitPlanMode usage blocked: post-completion summary
+🔍[req_123] ExitPlanMode validation: completion indicators detected in plan content
+🔍[req_123] ExitPlanMode validation: 5 recent implementation tools detected
+```
+
 ## Data Flow
 
 ### Request Flow

@@ -248,6 +248,57 @@ func (h *Handler) HandleAnthropicRequest(w http.ResponseWriter, r *http.Request)
 		logger.LogLargeConversation(ctx, loggerInstance, len(openaiReq.Messages))
 	}
 
+	// Validate ExitPlanMode usage before sending to provider
+	for _, msg := range openaiReq.Messages {
+		if msg.ToolCalls != nil {
+			for _, toolCall := range msg.ToolCalls {
+				if toolCall.Function.Name == "ExitPlanMode" {
+					// Convert to types.Content for validation
+					exitPlanCall := types.Content{
+						Type: "tool_use",
+						ID:   toolCall.ID,
+						Name: toolCall.Function.Name,
+						Input: make(map[string]interface{}),
+					}
+					
+					// Parse arguments JSON to map for validation
+					var args map[string]interface{}
+					if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &args); err == nil {
+						exitPlanCall.Input = args
+					}
+					
+					// Validate ExitPlanMode usage
+					shouldBlock, reason := h.correctionService.ValidateExitPlanMode(ctx, exitPlanCall, openaiReq.Messages)
+					if shouldBlock {
+						loggerInstance.Error("🚫 ExitPlanMode usage blocked: %s", reason)
+						
+						// Return educational response instead of forwarding to provider
+						educationalResponse := &types.AnthropicResponse{
+							ID:         "blocked-exitplanmode",
+							Type:       "message",
+							Role:       "assistant", 
+							Model:      originalModel,
+							Content:    []types.Content{{
+								Type: "text",
+								Text: fmt.Sprintf("I understand you want to use ExitPlanMode, but this tool should only be used for **planning before implementation**, not as a completion summary.\n\n**Issue detected**: %s\n\n**Proper ExitPlanMode usage:**\n- Use it BEFORE starting any implementation work\n- Use it to present a plan for user approval\n- Use it when you need to outline steps you will take\n\n**Avoid using ExitPlanMode for:**\n- Summarizing completed work\n- Reporting finished tasks\n- Indicating that implementation is done\n\nWould you like me to help you with the next steps instead?", reason),
+							}},
+							Usage:      types.Usage{InputTokens: 0, OutputTokens: 0},
+							StopReason: "end_turn",
+						}
+						
+						// Send educational response
+						w.Header().Set("Content-Type", "application/json")
+						if err := json.NewEncoder(w).Encode(educationalResponse); err != nil {
+							loggerInstance.Error("❌ Failed to encode educational response: %v", err)
+							http.Error(w, "Response encoding failed", http.StatusInternalServerError)
+						}
+						return
+					}
+				}
+			}
+		}
+	}
+
 	// Proxy to selected provider - handle streaming if requested
 	response, err := h.proxyToProviderEndpoint(ctx, openaiReq, endpoint, apiKey, originalModel)
 	if err != nil {

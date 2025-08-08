@@ -1885,6 +1885,180 @@ func (s *Service) AttemptRuleBasedParameterCorrection(ctx context.Context, call 
 	return correctedCall, true
 }
 
+// ValidateExitPlanMode validates ExitPlanMode usage with conversation context
+// Returns (shouldBlock, reason) where shouldBlock=true means the tool call should be blocked
+func (s *Service) ValidateExitPlanMode(ctx context.Context, call types.Content, messages []types.OpenAIMessage) (bool, string) {
+	requestID := getRequestID(ctx)
+	
+	if call.Name != "ExitPlanMode" || call.Type != "tool_use" {
+		return false, ""
+	}
+	
+	if s.shouldLog() {
+		log.Printf("🔍[%s] Validating ExitPlanMode usage", requestID)
+	}
+	
+	// Check 1: Analyze plan content for completion indicators (high priority)
+	if s.hasCompletionIndicators(call) {
+		if s.shouldLog() {
+			log.Printf("🚫[%s] ExitPlanMode blocked: completion indicators in plan content", requestID)
+		}
+		return true, "post-completion summary"
+	}
+	
+	// Check 2: Only block based on implementation work if the plan content also suggests completion
+	implementationCount := s.countRecentImplementationWork(messages)
+	if implementationCount >= 3 {
+		// Additional check: is this likely a summary rather than a new plan?
+		if s.looksLikeSummaryContent(call) {
+			if s.shouldLog() {
+				log.Printf("🚫[%s] ExitPlanMode blocked: %d recent implementation tool calls + summary-like content", requestID, implementationCount)
+			}
+			return true, "post-implementation usage"
+		} else {
+			// This might be legitimate planning for next steps after previous work
+			if s.shouldLog() {
+				log.Printf("ℹ️[%s] ExitPlanMode allowed: %d recent implementation tool calls but content appears to be forward-looking planning", requestID, implementationCount)
+			}
+		}
+	}
+	
+	if s.shouldLog() {
+		log.Printf("✅[%s] ExitPlanMode allowed: valid planning usage", requestID)
+	}
+	return false, ""
+}
+
+// hasCompletionIndicators checks if the plan content contains completion indicators
+func (s *Service) hasCompletionIndicators(call types.Content) bool {
+	plan, exists := call.Input["plan"]
+	if !exists {
+		return false
+	}
+	
+	planStr, ok := plan.(string)
+	if !ok {
+		return false
+	}
+	
+	planLower := strings.ToLower(planStr)
+	
+	// Define completion indicators that suggest post-completion usage
+	completionIndicators := []string{
+		"✅",
+		"completed successfully", 
+		"all tasks completed",
+		"implementation finished",
+		"work is done",
+		"ready for production",
+		"ready for deployment",
+		"ready for review",
+		"all functionality is working",
+		"summary of implementation",
+		"summary of changes",
+		"everything is complete",
+	}
+	
+	for _, indicator := range completionIndicators {
+		if strings.Contains(planLower, indicator) {
+			return true
+		}
+	}
+	
+	return false
+}
+
+// looksLikeSummaryContent checks if plan content appears to be summarizing past work
+func (s *Service) looksLikeSummaryContent(call types.Content) bool {
+	plan, exists := call.Input["plan"]
+	if !exists {
+		return false
+	}
+	
+	planStr, ok := plan.(string)
+	if !ok {
+		return false
+	}
+	
+	planLower := strings.ToLower(planStr)
+	
+	// Summary indicators (different from completion indicators)
+	summaryIndicators := []string{
+		"summary of",
+		"has been implemented",
+		"have been implemented", 
+		"changes made",
+		"work completed",
+		"features added",
+		"implementation details",
+		"what was done",
+		"accomplished",
+		"delivered",
+		"finished implementing",
+	}
+	
+	summaryCount := 0
+	for _, indicator := range summaryIndicators {
+		if strings.Contains(planLower, indicator) {
+			summaryCount++
+		}
+	}
+	
+	// Also check for past tense verbs indicating completed work
+	pastTenseIndicators := []string{
+		"implemented",
+		"added",
+		"created",
+		"updated",  
+		"fixed",
+		"completed",
+		"built",
+		"deployed",
+		"tested",
+	}
+	
+	pastTenseCount := 0
+	for _, indicator := range pastTenseIndicators {
+		if strings.Contains(planLower, indicator) {
+			pastTenseCount++
+		}
+	}
+	
+	// If we have multiple summary indicators or many past tense verbs, likely a summary
+	return summaryCount >= 2 || pastTenseCount >= 4
+}
+
+// countRecentImplementationWork analyzes recent messages for implementation tool usage
+func (s *Service) countRecentImplementationWork(messages []types.OpenAIMessage) int {
+	// Define tools that indicate implementation work (not research)
+	implementationTools := map[string]bool{
+		"Write":     true,
+		"Edit":      true,
+		"MultiEdit": true,
+		"Bash":      true,
+		"TodoWrite": true,
+	}
+	
+	// Analyze recent messages (last 15 messages or all if fewer)
+	startIndex := 0
+	if len(messages) > 15 {
+		startIndex = len(messages) - 15
+	}
+	
+	implementationCount := 0
+	for i := startIndex; i < len(messages); i++ {
+		if messages[i].ToolCalls != nil {
+			for _, toolCall := range messages[i].ToolCalls {
+				if implementationTools[toolCall.Function.Name] {
+					implementationCount++
+				}
+			}
+		}
+	}
+	
+	return implementationCount
+}
+
 // checkTodoWriteStructure validates TodoWrite internal structure
 func (s *Service) checkTodoWriteStructure(call types.Content) bool {
 	if todos, exists := call.Input["todos"]; exists {

@@ -11,25 +11,25 @@ import (
 	"strings"
 	"sync"
 	"time"
-	
+
 	"gopkg.in/yaml.v3"
 )
 
 // EndpointHealth tracks the health status of an endpoint
 type EndpointHealth struct {
-	URL              string    `json:"url"`
-	FailureCount     int       `json:"failure_count"`
-	LastFailureTime  time.Time `json:"last_failure_time"`
-	CircuitOpen      bool      `json:"circuit_open"`
-	NextRetryTime    time.Time `json:"next_retry_time"`
+	URL             string    `json:"url"`
+	FailureCount    int       `json:"failure_count"`
+	LastFailureTime time.Time `json:"last_failure_time"`
+	CircuitOpen     bool      `json:"circuit_open"`
+	NextRetryTime   time.Time `json:"next_retry_time"`
 }
 
 // CircuitBreakerConfig controls circuit breaker behavior
 type CircuitBreakerConfig struct {
-	FailureThreshold   int           `json:"failure_threshold"`   // Number of failures before opening circuit
-	BackoffDuration    time.Duration `json:"backoff_duration"`    // How long to wait before retrying failed endpoint
+	FailureThreshold   int           `json:"failure_threshold"`    // Number of failures before opening circuit
+	BackoffDuration    time.Duration `json:"backoff_duration"`     // How long to wait before retrying failed endpoint
 	MaxBackoffDuration time.Duration `json:"max_backoff_duration"` // Maximum backoff time
-	ResetTimeout       time.Duration `json:"reset_timeout"`       // Time to reset failure count after success
+	ResetTimeout       time.Duration `json:"reset_timeout"`        // Time to reset failure count after success
 }
 
 // DefaultCircuitBreakerConfig returns sensible defaults for circuit breaker
@@ -44,7 +44,7 @@ func DefaultCircuitBreakerConfig() CircuitBreakerConfig {
 
 // Config represents the proxy configuration - all settings from .env
 type Config struct {
-	Port         string `json:"port"`
+	Port string `json:"port"`
 
 	// Tool correction settings
 	ToolCorrectionEnabled bool `json:"tool_correction_enabled"`
@@ -60,9 +60,9 @@ type Config struct {
 	ToolDescriptions map[string]string `json:"tool_descriptions"`
 
 	// Debug settings
-	PrintSystemMessage           bool `json:"print_system_message"`           // Print system messages to logs
-	PrintToolSchemas             bool `json:"print_tool_schemas"`             // Print tool schemas from Claude Code for debugging
-	DisableSmallModelLogging     bool `json:"disable_small_model_logging"`    // Disable logging for small model (Haiku) requests
+	PrintSystemMessage           bool `json:"print_system_message"`            // Print system messages to logs
+	PrintToolSchemas             bool `json:"print_tool_schemas"`              // Print tool schemas from Claude Code for debugging
+	DisableSmallModelLogging     bool `json:"disable_small_model_logging"`     // Disable logging for small model (Haiku) requests
 	DisableToolCorrectionLogging bool `json:"disable_tool_correction_logging"` // Disable logging for tool correction operations
 
 	// Conversation logging settings
@@ -74,56 +74,56 @@ type Config struct {
 	SystemMessageOverrides SystemMessageOverrides `json:"system_message_overrides"`
 
 	// Model configuration (.env configurable)
-	BigModel         string `json:"big_model"`         // For Claude Sonnet requests
-	SmallModel       string `json:"small_model"`       // For Claude Haiku requests
-	CorrectionModel  string `json:"correction_model"`  // For tool correction service
-	
+	BigModel        string `json:"big_model"`        // For Claude Sonnet requests
+	SmallModel      string `json:"small_model"`      // For Claude Haiku requests
+	CorrectionModel string `json:"correction_model"` // For tool correction service
+
 	// Endpoint configuration (.env configurable) - supports multiple endpoints
-	BigModelEndpoints        []string `json:"big_model_endpoints"`        // Endpoints for BIG_MODEL (comma-separated)
-	SmallModelEndpoints      []string `json:"small_model_endpoints"`      // Endpoints for SMALL_MODEL (comma-separated)
-	ToolCorrectionEndpoints  []string `json:"tool_correction_endpoints"`  // Endpoints for TOOL_CORRECTION_LLM (comma-separated)
-	
+	BigModelEndpoints       []string `json:"big_model_endpoints"`       // Endpoints for BIG_MODEL (comma-separated)
+	SmallModelEndpoints     []string `json:"small_model_endpoints"`     // Endpoints for SMALL_MODEL (comma-separated)
+	ToolCorrectionEndpoints []string `json:"tool_correction_endpoints"` // Endpoints for TOOL_CORRECTION_LLM (comma-separated)
+
 	// API Key configuration (.env configurable)
-	BigModelAPIKey           string `json:"big_model_api_key"`           // API Key for BIG_MODEL
-	SmallModelAPIKey         string `json:"small_model_api_key"`         // API Key for SMALL_MODEL
-	ToolCorrectionAPIKey     string `json:"tool_correction_api_key"`     // API Key for TOOL_CORRECTION_LLM
-	
+	BigModelAPIKey       string `json:"big_model_api_key"`       // API Key for BIG_MODEL
+	SmallModelAPIKey     string `json:"small_model_api_key"`     // API Key for SMALL_MODEL
+	ToolCorrectionAPIKey string `json:"tool_correction_api_key"` // API Key for TOOL_CORRECTION_LLM
+
 	// Endpoint rotation state (not serialized)
-	bigModelIndex            int    `json:"-"`
-	smallModelIndex          int    `json:"-"`
-	toolCorrectionIndex      int    `json:"-"`
-	mutex                    sync.Mutex `json:"-"`
-	
+	bigModelIndex       int        `json:"-"`
+	smallModelIndex     int        `json:"-"`
+	toolCorrectionIndex int        `json:"-"`
+	mutex               sync.Mutex `json:"-"`
+
 	// Circuit breaker configuration and health tracking
-	CircuitBreaker           CircuitBreakerConfig       `json:"circuit_breaker"`
-	EndpointHealthMap        map[string]*EndpointHealth `json:"-"`
-	healthMutex              sync.RWMutex               `json:"-"`
+	CircuitBreaker    CircuitBreakerConfig       `json:"circuit_breaker"`
+	EndpointHealthMap map[string]*EndpointHealth `json:"-"`
+	healthMutex       sync.RWMutex               `json:"-"`
 }
 
 // GetDefaultConfig returns a default configuration for testing
 func GetDefaultConfig() *Config {
 	return &Config{
-		Port:                  "3456",
-		ToolCorrectionEnabled: true,
-		SkipTools:             []string{}, // Empty array by default
-		ToolDescriptions:      make(map[string]string), // Empty map by default
-		PrintSystemMessage:           false, // Disabled by default
-		PrintToolSchemas:             false, // Disabled by default
-		DisableSmallModelLogging:     false, // Enabled by default (normal logging)
-		DisableToolCorrectionLogging: false, // Enabled by default (normal logging)
-		ConversationLoggingEnabled:   false, // Disabled by default
-		ConversationLogLevel:         "INFO", // Default to INFO level
-		ConversationMaskSensitive:    true,  // Enable sensitive data masking by default
+		Port:                         "3456",
+		ToolCorrectionEnabled:        true,
+		SkipTools:                    []string{},               // Empty array by default
+		ToolDescriptions:             make(map[string]string),  // Empty map by default
+		PrintSystemMessage:           false,                    // Disabled by default
+		PrintToolSchemas:             false,                    // Disabled by default
+		DisableSmallModelLogging:     false,                    // Enabled by default (normal logging)
+		DisableToolCorrectionLogging: false,                    // Enabled by default (normal logging)
+		ConversationLoggingEnabled:   false,                    // Disabled by default
+		ConversationLogLevel:         "INFO",                   // Default to INFO level
+		ConversationMaskSensitive:    true,                     // Enable sensitive data masking by default
 		SystemMessageOverrides:       SystemMessageOverrides{}, // Empty by default
-		BigModel:               "",  // Will be set from .env
-		SmallModel:             "",  // Will be set from .env
-		CorrectionModel:        "",  // Will be set from .env
-		BigModelEndpoints:      []string{}, // Will be set from .env
-		SmallModelEndpoints:     []string{}, // Will be set from .env
-		ToolCorrectionEndpoints: []string{}, // Will be set from .env
-		BigModelAPIKey:         "",  // Will be set from .env
-		SmallModelAPIKey:       "",  // Will be set from .env
-		ToolCorrectionAPIKey:   "",  // Will be set from .env
+		BigModel:                     "",                       // Will be set from .env
+		SmallModel:                   "",                       // Will be set from .env
+		CorrectionModel:              "",                       // Will be set from .env
+		BigModelEndpoints:            []string{},               // Will be set from .env
+		SmallModelEndpoints:          []string{},               // Will be set from .env
+		ToolCorrectionEndpoints:      []string{},               // Will be set from .env
+		BigModelAPIKey:               "",                       // Will be set from .env
+		SmallModelAPIKey:             "",                       // Will be set from .env
+		ToolCorrectionAPIKey:         "",                       // Will be set from .env
 	}
 }
 
@@ -137,18 +137,18 @@ func LoadConfigWithEnv() (*Config, error) {
 
 	// Create new config with defaults
 	cfg := &Config{
-		Port:                   "3456", // Default port
-		ToolCorrectionEnabled:  true,   // Enable by default
-		HandleEmptyToolResults: true,   // Enable by default for API compliance
-		SkipTools:              []string{}, // Empty by default
-		ToolDescriptions:       make(map[string]string), // Empty by default
-		PrintSystemMessage:     false, // Disabled by default
-		PrintToolSchemas:       false, // Disabled by default
-		ConversationLoggingEnabled: false, // Disabled by default
-		ConversationLogLevel:       "INFO", // Default to INFO level
-		ConversationMaskSensitive:  true,  // Enable sensitive data masking by default
-		CircuitBreaker:         DefaultCircuitBreakerConfig(),
-		SystemMessageOverrides: SystemMessageOverrides{}, // Empty by default
+		Port:                       "3456",                  // Default port
+		ToolCorrectionEnabled:      true,                    // Enable by default
+		HandleEmptyToolResults:     true,                    // Enable by default for API compliance
+		SkipTools:                  []string{},              // Empty by default
+		ToolDescriptions:           make(map[string]string), // Empty by default
+		PrintSystemMessage:         false,                   // Disabled by default
+		PrintToolSchemas:           false,                   // Disabled by default
+		ConversationLoggingEnabled: false,                   // Disabled by default
+		ConversationLogLevel:       "INFO",                  // Default to INFO level
+		ConversationMaskSensitive:  true,                    // Enable sensitive data masking by default
+		CircuitBreaker:             DefaultCircuitBreakerConfig(),
+		SystemMessageOverrides:     SystemMessageOverrides{}, // Empty by default
 	}
 
 	// All models and endpoints are required when .env exists - no fallbacks
@@ -404,7 +404,7 @@ func maskAPIKey(apiKey string) string {
 // loadEnvFile loads environment variables from .env file in current directory
 func loadEnvFile() (map[string]string, error) {
 	envVars := make(map[string]string)
-	
+
 	file, err := os.Open(".env")
 	if err != nil {
 		return envVars, err
@@ -414,29 +414,29 @@ func loadEnvFile() (map[string]string, error) {
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
-		
+
 		// Skip empty lines and comments
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		
+
 		// Parse KEY=VALUE format
 		parts := strings.SplitN(line, "=", 2)
 		if len(parts) != 2 {
 			continue
 		}
-		
+
 		key := strings.TrimSpace(parts[0])
 		value := strings.TrimSpace(parts[1])
-		
+
 		// Remove comments from value
 		if commentIndex := strings.Index(value, "#"); commentIndex != -1 {
 			value = strings.TrimSpace(value[:commentIndex])
 		}
-		
+
 		envVars[key] = value
 	}
-	
+
 	return envVars, scanner.Err()
 }
 
@@ -574,7 +574,7 @@ func ApplySystemMessageOverrides(originalMessage string, overrides SystemMessage
 			log.Printf("⚠️  Warning: Invalid regex pattern '%s': %v", pattern, err)
 			continue
 		}
-		
+
 		// Find matches before removing them
 		matches := re.FindAllString(message, -1)
 		if len(matches) > 0 {
@@ -592,7 +592,7 @@ func ApplySystemMessageOverrides(originalMessage string, overrides SystemMessage
 			message = strings.ReplaceAll(message, replacement.Find, replacement.Replace)
 			// Count occurrences replaced
 			occurrences := strings.Count(oldMessage, replacement.Find)
-			log.Printf("🔄 replacement applied: '%s' → '%s' (%d occurrences)", 
+			log.Printf("🔄 replacement applied: '%s' → '%s' (%d occurrences)",
 				replacement.Find, replacement.Replace, occurrences)
 		}
 	}
@@ -607,6 +607,9 @@ func ApplySystemMessageOverrides(originalMessage string, overrides SystemMessage
 		log.Printf("➕ append applied: '%s'", strings.TrimSpace(overrides.Append))
 	}
 
+	// Print updated system prompt
+	log.Printf("Modified system prompt:\n%s", message)
+
 	return message
 }
 
@@ -614,11 +617,11 @@ func ApplySystemMessageOverrides(originalMessage string, overrides SystemMessage
 func (c *Config) GetBigModelEndpoint() string {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
-	
+
 	if len(c.BigModelEndpoints) == 0 {
 		return ""
 	}
-	
+
 	endpoint := c.BigModelEndpoints[c.bigModelIndex]
 	c.bigModelIndex = (c.bigModelIndex + 1) % len(c.BigModelEndpoints)
 	return endpoint
@@ -628,11 +631,11 @@ func (c *Config) GetBigModelEndpoint() string {
 func (c *Config) GetSmallModelEndpoint() string {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
-	
+
 	if len(c.SmallModelEndpoints) == 0 {
 		return ""
 	}
-	
+
 	endpoint := c.SmallModelEndpoints[c.smallModelIndex]
 	c.smallModelIndex = (c.smallModelIndex + 1) % len(c.SmallModelEndpoints)
 	return endpoint
@@ -642,11 +645,11 @@ func (c *Config) GetSmallModelEndpoint() string {
 func (c *Config) GetToolCorrectionEndpoint() string {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
-	
+
 	if len(c.ToolCorrectionEndpoints) == 0 {
 		return ""
 	}
-	
+
 	endpoint := c.ToolCorrectionEndpoints[c.toolCorrectionIndex]
 	c.toolCorrectionIndex = (c.toolCorrectionIndex + 1) % len(c.ToolCorrectionEndpoints)
 	return endpoint
@@ -656,15 +659,15 @@ func (c *Config) GetToolCorrectionEndpoint() string {
 func (c *Config) InitializeEndpointHealthMap() {
 	c.healthMutex.Lock()
 	defer c.healthMutex.Unlock()
-	
+
 	if c.EndpointHealthMap == nil {
 		c.EndpointHealthMap = make(map[string]*EndpointHealth)
 	}
-	
+
 	// Initialize health for all endpoints
 	allEndpoints := append(c.BigModelEndpoints, c.SmallModelEndpoints...)
 	allEndpoints = append(allEndpoints, c.ToolCorrectionEndpoints...)
-	
+
 	for _, endpoint := range allEndpoints {
 		if _, exists := c.EndpointHealthMap[endpoint]; !exists {
 			c.EndpointHealthMap[endpoint] = &EndpointHealth{
@@ -680,12 +683,12 @@ func (c *Config) InitializeEndpointHealthMap() {
 func (c *Config) IsEndpointHealthy(endpoint string) bool {
 	c.healthMutex.RLock()
 	defer c.healthMutex.RUnlock()
-	
+
 	health, exists := c.EndpointHealthMap[endpoint]
 	if !exists {
 		return true // Unknown endpoints are assumed healthy
 	}
-	
+
 	// If circuit is open, check if it's time to retry
 	if health.CircuitOpen {
 		if time.Now().After(health.NextRetryTime) {
@@ -693,7 +696,7 @@ func (c *Config) IsEndpointHealthy(endpoint string) bool {
 		}
 		return false // Still in backoff period
 	}
-	
+
 	return true // Circuit is closed, endpoint is healthy
 }
 
@@ -701,12 +704,12 @@ func (c *Config) IsEndpointHealthy(endpoint string) bool {
 func (c *Config) GetEndpointHealthDebug(endpoint string) (failureCount int, circuitOpen bool, nextRetryTime time.Time, exists bool) {
 	c.healthMutex.RLock()
 	defer c.healthMutex.RUnlock()
-	
+
 	health, exists := c.EndpointHealthMap[endpoint]
 	if !exists {
 		return 0, false, time.Time{}, false
 	}
-	
+
 	return health.FailureCount, health.CircuitOpen, health.NextRetryTime, true
 }
 
@@ -714,20 +717,20 @@ func (c *Config) GetEndpointHealthDebug(endpoint string) (failureCount int, circ
 func (c *Config) RecordEndpointFailure(endpoint string) {
 	c.healthMutex.Lock()
 	defer c.healthMutex.Unlock()
-	
+
 	health, exists := c.EndpointHealthMap[endpoint]
 	if !exists {
 		health = &EndpointHealth{URL: endpoint}
 		c.EndpointHealthMap[endpoint] = health
 	}
-	
+
 	health.FailureCount++
 	health.LastFailureTime = time.Now()
-	
+
 	// Open circuit if failure threshold exceeded
 	if health.FailureCount >= c.CircuitBreaker.FailureThreshold {
 		health.CircuitOpen = true
-		
+
 		// Calculate backoff time with exponential backoff capped at max
 		// When we hit threshold, we want at least 1x backoff
 		failuresOverThreshold := health.FailureCount - c.CircuitBreaker.FailureThreshold + 1
@@ -738,15 +741,14 @@ func (c *Config) RecordEndpointFailure(endpoint string) {
 		if backoff > c.CircuitBreaker.MaxBackoffDuration {
 			backoff = c.CircuitBreaker.MaxBackoffDuration
 		}
-		
-		
+
 		now := time.Now()
 		health.NextRetryTime = now.Add(backoff)
-		
-		log.Printf("🚨 Circuit breaker opened for endpoint %s (failures: %d, retry in: %v)", 
+
+		log.Printf("🚨 Circuit breaker opened for endpoint %s (failures: %d, retry in: %v)",
 			endpoint, health.FailureCount, backoff)
 	} else {
-		log.Printf("⚠️ Endpoint failure recorded: %s (failures: %d/%d)", 
+		log.Printf("⚠️ Endpoint failure recorded: %s (failures: %d/%d)",
 			endpoint, health.FailureCount, c.CircuitBreaker.FailureThreshold)
 	}
 }
@@ -755,13 +757,13 @@ func (c *Config) RecordEndpointFailure(endpoint string) {
 func (c *Config) RecordEndpointSuccess(endpoint string) {
 	c.healthMutex.Lock()
 	defer c.healthMutex.Unlock()
-	
+
 	health, exists := c.EndpointHealthMap[endpoint]
 	if !exists {
 		health = &EndpointHealth{URL: endpoint}
 		c.EndpointHealthMap[endpoint] = health
 	}
-	
+
 	// If circuit was open, close it and reset
 	if health.CircuitOpen {
 		health.CircuitOpen = false
@@ -779,27 +781,27 @@ func (c *Config) RecordEndpointSuccess(endpoint string) {
 func (c *Config) GetHealthySmallModelEndpoint() string {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
-	
+
 	if len(c.SmallModelEndpoints) == 0 {
 		return ""
 	}
-	
+
 	// Try to find a healthy endpoint, starting from current index
 	startIndex := c.smallModelIndex
 	for i := 0; i < len(c.SmallModelEndpoints); i++ {
 		endpoint := c.SmallModelEndpoints[c.smallModelIndex]
 		c.smallModelIndex = (c.smallModelIndex + 1) % len(c.SmallModelEndpoints)
-		
+
 		if c.IsEndpointHealthy(endpoint) {
 			return endpoint
 		}
-		
+
 		// If we've cycled through all endpoints, break to avoid infinite loop
 		if c.smallModelIndex == startIndex {
 			break
 		}
 	}
-	
+
 	// If no healthy endpoints found, return the next one anyway (last resort)
 	// This handles the case where all endpoints are unhealthy
 	endpoint := c.SmallModelEndpoints[c.smallModelIndex]
@@ -811,27 +813,27 @@ func (c *Config) GetHealthySmallModelEndpoint() string {
 func (c *Config) GetHealthyToolCorrectionEndpoint() string {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
-	
+
 	if len(c.ToolCorrectionEndpoints) == 0 {
 		return ""
 	}
-	
+
 	// Try to find a healthy endpoint, starting from current index
 	startIndex := c.toolCorrectionIndex
 	for i := 0; i < len(c.ToolCorrectionEndpoints); i++ {
 		endpoint := c.ToolCorrectionEndpoints[c.toolCorrectionIndex]
 		c.toolCorrectionIndex = (c.toolCorrectionIndex + 1) % len(c.ToolCorrectionEndpoints)
-		
+
 		if c.IsEndpointHealthy(endpoint) {
 			return endpoint
 		}
-		
+
 		// If we've cycled through all endpoints, break to avoid infinite loop
 		if c.toolCorrectionIndex == startIndex {
 			break
 		}
 	}
-	
+
 	// If no healthy endpoints found, return the next one anyway (last resort)
 	endpoint := c.ToolCorrectionEndpoints[c.toolCorrectionIndex]
 	c.toolCorrectionIndex = (c.toolCorrectionIndex + 1) % len(c.ToolCorrectionEndpoints)
@@ -842,7 +844,7 @@ func (c *Config) GetHealthyToolCorrectionEndpoint() string {
 func (c *Config) MarkEndpointFailed(endpointType string) {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
-	
+
 	switch endpointType {
 	case "big_model":
 		if len(c.BigModelEndpoints) > 1 {
