@@ -27,7 +27,7 @@ func TestExitPlanModeRealWorldScenario(t *testing.T) {
 		Type: "tool_use",
 		Name: "ExitPlanMode",
 		Input: map[string]interface{}{
-			"plan": "✅ **All tasks completed successfully**\n\n**Summary of changes:**\n1. **InstallApp route** now supports binary file upload via `POST /installApp?deviceSerial={udid}` with `Content-Type: application/octet-stream`\n2. **Performance optimized** - direct binary upload eliminates JSON parsing and base64 encoding overhead\n3. **Unit tests** updated and passing for the new binary upload format\n4. **Error handling** added for missing deviceSerial, wrong content type, and installation failures\n\n**Ready for rdc-pool integration** - can now accept IPA files directly as binary data streams.",
+			"plan": "✅ **All tasks completed successfully**\n\n**Summary of changes:**\n1. **InstallApp route** now supports binary file upload via `POST /installApp?deviceId={id}` with `Content-Type: application/octet-stream`\n2. **Performance optimized** - direct binary upload eliminates JSON parsing and base64 encoding overhead\n3. **Unit tests** updated and passing for the new binary upload format\n4. **Error handling** added for missing deviceId, wrong content type, and installation failures\n\n**Ready for system integration** - can now accept app files directly as binary data streams.",
 		},
 	}
 

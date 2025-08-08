@@ -306,7 +306,7 @@ func TestLoopDetector_RealWorldScenarios(t *testing.T) {
 			{Role: "assistant", Content: "🔄 **Loop Detection**: Loop detected: TodoWrite called 7 times consecutively. The todo list may already be properly updated. Consider proceeding with actual task implementation or asking for clarification on what specific action is needed.\n\nI've detected a repetitive pattern and am breaking the loop to prevent infinite execution. Please provide more specific guidance or let me know if you need help with a different approach."},
 
 			// User provides clarification (this should NOT trigger another loop detection)
-			{Role: "user", Content: "here is reminder of what we were doing: find if there is code responsible for setting the orientation lock on android. Start from rdc-pool project. There is a file named \"DeviceRobot.java\". Then try to search for code that is setting the orientation lock. Alternatively, search for code that is setting accelerometer rotation using adb shell commands. When I restart a live testing session on Android, I always see orientation lock is enabled (auto-rotation is disabled) and I need to find the code responsible for doing that"},
+			{Role: "user", Content: "here is reminder of what we were doing: find if there is code responsible for setting the system configuration. Start from the project. There is a file named \"ConfigManager.java\". Then try to search for code that is handling the configuration. Alternatively, search for code that is managing system settings using command line tools. When I restart a session, I always see certain settings are enabled and I need to find the code responsible for doing that"},
 		}
 
 		// At this point, the system should NOT detect a loop because:

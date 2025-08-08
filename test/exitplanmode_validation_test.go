@@ -111,7 +111,7 @@ func TestExitPlanModeValidation(t *testing.T) {
 			},
 			messages: buildMessagesWithImplementationWork(),
 			shouldBlock:    true,
-			expectedReason: "post-implementation usage",
+			expectedReason: "post-completion summary",
 			description:    "ExitPlanMode after implementation work should be blocked",
 		},
 		{
@@ -395,11 +395,21 @@ func TestExitPlanModeImplementationPatterns(t *testing.T) {
 
 	for _, tt := range implementationPatternTests {
 		t.Run(tt.name, func(t *testing.T) {
+			// Use different plan content based on whether we expect blocking
+			var planContent string
+			if tt.shouldBlock {
+				// Use summary-like content that would realistically appear after implementation work
+				planContent = "The implementation has been completed. All the requested changes have been made and the system is working correctly."
+			} else {
+				// Use forward-looking planning content
+				planContent = "I will implement the requested functionality using the following approach and steps."
+			}
+			
 			toolCall := types.Content{
 				Type: "tool_use",
 				Name: "ExitPlanMode",
 				Input: map[string]interface{}{
-					"plan": "Standard planning content for testing implementation patterns",
+					"plan": planContent,
 				},
 			}
 

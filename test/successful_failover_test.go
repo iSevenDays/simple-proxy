@@ -119,7 +119,7 @@ func TestSuccessfulFailoverScenarios(t *testing.T) {
 		// First server times out
 		firstServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			atomic.AddInt64(&firstServerCalls, 1)
-			time.Sleep(35 * time.Second) // Timeout
+			time.Sleep(2 * time.Second) // Short timeout for unit tests
 		}))
 		defer firstServer.Close()
 		
@@ -151,7 +151,8 @@ func TestSuccessfulFailoverScenarios(t *testing.T) {
 				ID:   "test-1",
 				Name: "Read",
 				Input: map[string]interface{}{
-					"filename": "test.txt", // Wrong parameter name, needs correction
+					"file_path": "", // Empty path - will need correction
+					"extra_param": "invalid", // Invalid parameter that needs removal
 				},
 			},
 		}
@@ -169,7 +170,7 @@ func TestSuccessfulFailoverScenarios(t *testing.T) {
 			},
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 		defer cancel()
 
 		start := time.Now()
@@ -221,7 +222,7 @@ func TestSuccessfulFailoverScenarios(t *testing.T) {
 				if attempt == 1 {
 					http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
 				} else {
-					time.Sleep(35 * time.Second) // Timeout on second attempt
+					time.Sleep(2 * time.Second) // Short timeout on second attempt
 				}
 				return
 			}
@@ -245,7 +246,7 @@ func TestSuccessfulFailoverScenarios(t *testing.T) {
 		})
 		service := correction.NewService(config, "test-key", true, "test-model", false)
 
-		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
 		start := time.Now()
