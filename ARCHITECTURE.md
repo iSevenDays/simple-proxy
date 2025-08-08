@@ -612,7 +612,7 @@ Reason:    Client/server separation requires local file access via Read tool
 **Problem Solved:**
 Claude Code occasionally misuses the ExitPlanMode tool as a completion summary after implementation work, instead of using it for planning before implementation. This leads to confusing conversation flows where the tool is used to report finished work rather than outline upcoming work.
 
-**Architecture:**
+**Architecture (Hybrid LLM + Pattern Validation):**
 ```
 ┌─────────────────┐
 │ ExitPlanMode    │
@@ -621,21 +621,44 @@ Claude Code occasionally misuses the ExitPlanMode tool as a completion summary a
           │
           ▼
 ┌─────────────────┐
-│ Conversation-   │
-│ Aware Content   │
-│ Analysis        │
+│ Extract Plan    │
+│ Content &       │
+│ Conversation    │
+│ Context         │
 └─────────┬───────┘
           │
           ▼
 ┌─────────────────┐
-│ Completion      │
-│ Indicators      │
-│ Detection       │
-│ (✅, "completed")│
+│ 🤖 LLM-Based    │
+│ Contextual      │
+│ Analysis        │
+│ (Primary)       │
 └─────────┬───────┘
           │
       ┌───┴───┐
-      │Found? │
+      │ LLM   │
+      │Success│
+      └───┬───┘
+          │
+      ┌───┴───┐
+  Yes │       │ No (Error/Timeout)
+  ────┤       ├────┐
+      └───┬───┘    │
+          │        ▼
+          │  ┌─────────────────┐
+          │  │ 🔍 Pattern-Based │
+          │  │ Validation      │
+          │  │ (Fallback)      │
+          │  └─────────┬───────┘
+          │            │
+          ▼            ▼
+┌─────────────────────────────┐
+│ Validation Decision:        │
+│ BLOCK or ALLOW             │
+└─────────┬───────────────────┘
+          │
+      ┌───┴───┐
+      │Block? │
       └───┬───┘
           │
       ┌───┴───┐
@@ -644,116 +667,48 @@ Claude Code occasionally misuses the ExitPlanMode tool as a completion summary a
       └───────┘    │
           │        ▼
           │  ┌─────────────────┐
-          │  │ Block with      │
           │  │ Educational     │
           │  │ Response        │
           │  └─────────────────┘
           │
           ▼
 ┌─────────────────┐
-│ Implementation  │
-│ Work Pattern    │
-│ Analysis        │
-└─────────┬───────┘
-          │
-      ┌───┴───┐
-      │ 3+    │
-      │Recent │ No   ┌─────────────────┐
-      │Tools? │─────▶│ Allow Usage     │
-      └───┬───┘      │ (Valid Planning)│
-          │ Yes      └─────────────────┘
-          ▼
-┌─────────────────┐
-│ Summary Content │
-│ Analysis        │
-│ (past tense,    │
-│ completion lang)│
-└─────────┬───────┘
-          │
-      ┌───┴───┐
-      │Summary│
-      │Content│ No   ┌─────────────────┐
-      │Found? │─────▶│ Allow Usage     │
-      └───┬───┘      │ (Valid Planning)│
-          │ Yes      └─────────────────┘
-          ▼
-┌─────────────────┐
-│ Block with      │
-│ Educational     │
-│ Response        │
+│ Allow Usage     │
+│ (Valid Planning)│
 └─────────────────┘
 ```
 
-**Conversation-Aware Analysis:**
-```go
-func (s *Service) ValidateExitPlanMode(ctx context.Context, call types.Content, messages []types.OpenAIMessage) (bool, string) {
-    // Check 1: Analyze plan content for completion indicators
-    if s.hasCompletionIndicators(call) {
-        return true, "post-completion summary"
-    }
-    
-    // Check 2: Only block based on implementation work if content suggests completion
-    implementationCount := s.countRecentImplementationWork(messages)
-    if implementationCount >= 3 && s.looksLikeSummaryContent(call) {
-        return true, "post-implementation usage"
-    }
-    
-    return false, ""
-}
-```
+**Hybrid Validation Approach:**
+- **Primary Method**: LLM-based contextual analysis using conversation history
+- **Fallback Method**: Pattern-based validation when LLM is unavailable
+- **Decision Process**: LLM analyzes context and responds with BLOCK/ALLOW decision
+- **Resilience**: Automatic fallback ensures validation always works
 
 **Key Features:**
-- **Content Analysis**: Detects completion indicators (✅, "completed successfully", "all tasks completed")
-- **Implementation Pattern Detection**: Counts recent implementation work (Write, Edit, Bash, TodoWrite, MultiEdit)
-- **Context-Aware Logic**: Only blocks when both implementation work AND summary content are present
-- **Educational Responses**: Explains proper ExitPlanMode usage when blocking
-- **Legitimate Planning Protection**: Allows valid planning scenarios even after previous work
+- **🤖 LLM-First Validation**: Intelligent contextual analysis using conversation history and plan content
+- **🔍 Pattern-Based Fallback**: Reliable validation when LLM is unavailable or times out
+- **📊 Conversation Context**: Analyzes recent tool usage patterns and message history for better decisions
+- **🎯 Enhanced Detection**: Expanded completion indicators including real-world usage patterns
+- **🛡️ Robust Architecture**: Always provides validation even during LLM outages
+- **📚 Educational Responses**: Clear explanations of proper ExitPlanMode usage when blocking
+- **✅ Legitimate Planning Protection**: Allows valid planning scenarios even after previous implementation work
 
-**Completion Indicators Detection:**
-```go
-completionPatterns := []string{
-    "✅", "☑", "✓",                           // Visual completion indicators
-    "completed successfully", "all tasks completed", "work is done",
-    "implementation finished", "ready for production", "tasks are complete",
-    "everything is working", "all functionality", "summary of changes",
-}
-```
+**Detection Methods:**
+- **Content Analysis**: Identifies completion indicators (visual markers, past-tense language)
+- **Context Analysis**: Evaluates recent tool usage patterns for implementation work
+- **Linguistic Patterns**: Recognizes summary language vs planning language
+- **Conversation Flow**: Considers message history and tool call sequences
 
-**Implementation Work Detection:**
-```go
-implementationTools := map[string]bool{
-    "Write": true, "Edit": true, "MultiEdit": true,
-    "Bash": true, "TodoWrite": true,
-    // Research tools NOT counted: Read, Grep, Glob, WebSearch, etc.
-}
-```
+**Tool Classification:**
+- **Implementation Tools**: Write, Edit, MultiEdit, Bash, TodoWrite (indicate active development)
+- **Research Tools**: Read, Grep, Glob, WebSearch (indicate analysis/planning phase)
+- **Pattern Recognition**: Distinguishes between planning vs completion phases
 
-**Educational Response Example:**
-```
-I understand you want to use ExitPlanMode, but this tool should only be used for 
-**planning before implementation**, not as a completion summary.
-
-**Issue detected**: post-completion summary
-
-**Proper ExitPlanMode usage:**
-- Use it BEFORE starting any implementation work
-- Use it to present a plan for user approval  
-- Use it when you need to outline steps you will take
-
-**Avoid using ExitPlanMode for:**
-- Summarizing completed work
-- Reporting finished tasks
-- Indicating that implementation is done
-
-Would you like me to help you with the next steps instead?
-```
-
-**Example Logs:**
-```
-🚫[req_123] ExitPlanMode usage blocked: post-completion summary
-🔍[req_123] ExitPlanMode validation: completion indicators detected in plan content
-🔍[req_123] ExitPlanMode validation: 5 recent implementation tools detected
-```
+**Integration Points:**
+- **Handler Integration**: Validates ExitPlanMode calls before forwarding to providers
+- **Correction Service**: Leverages existing LLM infrastructure and endpoint management
+- **Circuit Breaker**: Uses existing failover and retry mechanisms  
+- **Educational Responses**: Provides guidance when blocking inappropriate usage
 
 ## Data Flow
 
