@@ -472,6 +472,78 @@ func (s *Service) DetectToolNecessity(ctx context.Context, userMessage string, a
 	return shouldRequire, nil
 }
 
+// buildExitPlanModeValidationPrompt creates the prompt for ExitPlanMode usage validation
+func (s *Service) buildExitPlanModeValidationPrompt(planContent string, messages []types.OpenAIMessage) string {
+	// Analyze recent conversation for context
+	implementationCount := s.countRecentImplementationWork(messages)
+	recentTools := s.getRecentToolNames(messages, 10) // Get last 10 tools used
+	
+	return fmt.Sprintf(`Analyze this ExitPlanMode usage and determine if it's appropriate:
+
+PLAN CONTENT:
+"%s"
+
+CONVERSATION CONTEXT:
+- Recent implementation tools used (%d total): %s
+- Total messages in conversation: %d
+
+RULES FOR EXITPLANMODE:
+✅ APPROPRIATE USAGE (respond with ALLOW):
+- Planning future implementation steps
+- Outlining approach before starting work
+- Requesting approval for implementation plan
+- Forward-looking language: "I will...", "Here's my plan...", "I propose..."
+
+❌ INAPPROPRIATE USAGE (respond with BLOCK):
+- Summarizing completed work
+- Reporting finished implementation 
+- Using past tense to describe what was done: "I've implemented...", "The implementation included..."
+- Completion language: "successfully completed", "all tasks finished", "ready for production"
+
+ANALYSIS CRITERIA:
+1. Language tense: Future-focused planning vs past-tense completion summary
+2. Content purpose: Outlining upcoming work vs reporting finished work
+3. Context: Is this planning before work or summarizing after work?
+
+Respond with ONLY "BLOCK" or "ALLOW".`, 
+		planContent, 
+		implementationCount, 
+		strings.Join(recentTools, ", "),
+		len(messages))
+}
+
+// BuildExitPlanModeValidationPrompt is a public wrapper for testing
+func (s *Service) BuildExitPlanModeValidationPrompt(planContent string, messages []types.OpenAIMessage) string {
+	return s.buildExitPlanModeValidationPrompt(planContent, messages)
+}
+
+// getRecentToolNames extracts recent tool names for context
+func (s *Service) getRecentToolNames(messages []types.OpenAIMessage, limit int) []string {
+	var tools []string
+	count := 0
+	
+	// Go backwards through messages to get most recent tools
+	for i := len(messages) - 1; i >= 0 && count < limit; i-- {
+		msg := messages[i]
+		if msg.ToolCalls != nil {
+			for _, toolCall := range msg.ToolCalls {
+				if count >= limit {
+					break
+				}
+				tools = append(tools, toolCall.Function.Name)
+				count++
+			}
+		}
+	}
+	
+	// Reverse to get chronological order
+	for i, j := 0, len(tools)-1; i < j; i, j = i+1, j-1 {
+		tools[i], tools[j] = tools[j], tools[i]
+	}
+	
+	return tools
+}
+
 // buildToolNecessityPrompt creates the prompt for tool necessity analysis
 func (s *Service) buildToolNecessityPrompt(userMessage string, availableTools []types.Tool) string {
 	// Build available tools list
@@ -1885,7 +1957,7 @@ func (s *Service) AttemptRuleBasedParameterCorrection(ctx context.Context, call 
 	return correctedCall, true
 }
 
-// ValidateExitPlanMode validates ExitPlanMode usage with conversation context
+// ValidateExitPlanMode validates ExitPlanMode usage with conversation context using LLM analysis
 // Returns (shouldBlock, reason) where shouldBlock=true means the tool call should be blocked
 func (s *Service) ValidateExitPlanMode(ctx context.Context, call types.Content, messages []types.OpenAIMessage) (bool, string) {
 	requestID := getRequestID(ctx)
@@ -1894,14 +1966,92 @@ func (s *Service) ValidateExitPlanMode(ctx context.Context, call types.Content, 
 		return false, ""
 	}
 	
+	if !s.enabled {
+		return false, "" // Skip validation if correction service disabled
+	}
+	
 	if s.shouldLog() {
-		log.Printf("🔍[%s] Validating ExitPlanMode usage", requestID)
+		log.Printf("🔍[%s] Validating ExitPlanMode usage with LLM analysis", requestID)
+	}
+	
+	// Extract plan content
+	plan, exists := call.Input["plan"]
+	if !exists {
+		return false, "" // Let schema validation handle missing plan
+	}
+	
+	planStr, ok := plan.(string)
+	if !ok {
+		return false, "" // Let schema validation handle non-string plan
+	}
+	
+	// Build analysis prompt with conversation context
+	prompt := s.buildExitPlanModeValidationPrompt(planStr, messages)
+	
+	// Create request to correction model
+	req := types.OpenAIRequest{
+		Model: s.modelName,
+		Messages: []types.OpenAIMessage{
+			{
+				Role:    "system",
+				Content: "You are an ExitPlanMode usage validator. Respond with ONLY 'BLOCK' if the ExitPlanMode is being used inappropriately as a completion summary, or 'ALLOW' if it's legitimate planning usage.",
+			},
+			{
+				Role:    "user", 
+				Content: prompt,
+			},
+		},
+		MaxTokens:   10, // Very short response needed
+		Temperature: 0.1,
+	}
+	
+	// Send request
+	response, err := s.sendCorrectionRequest(req)
+	if err != nil {
+		if s.shouldLog() {
+			log.Printf("⚠️[%s] ExitPlanMode LLM validation failed, falling back to pattern-based validation: %v", requestID, err)
+		}
+		// Fall back to pattern-based validation when LLM is unavailable
+		return s.validateExitPlanModeWithPatterns(ctx, call, messages)
+	}
+	
+	// Parse response
+	if len(response.Choices) == 0 {
+		if s.shouldLog() {
+			log.Printf("⚠️[%s] ExitPlanMode LLM validation no response, falling back to pattern-based validation", requestID)
+		}
+		return s.validateExitPlanModeWithPatterns(ctx, call, messages)
+	}
+	
+	content := strings.TrimSpace(strings.ToUpper(response.Choices[0].Message.Content))
+	shouldBlock := strings.HasPrefix(content, "BLOCK")
+	
+	if shouldBlock {
+		reason := "inappropriate usage detected by LLM analysis"
+		if s.shouldLog() {
+			log.Printf("🚫[%s] ExitPlanMode blocked by LLM: %s -> %s", requestID, strings.ToLower(content), reason)
+		}
+		return true, reason
+	} else {
+		if s.shouldLog() {
+			log.Printf("✅[%s] ExitPlanMode allowed by LLM: %s", requestID, strings.ToLower(content))
+		}
+		return false, ""
+	}
+}
+
+// validateExitPlanModeWithPatterns provides pattern-based validation as fallback
+func (s *Service) validateExitPlanModeWithPatterns(ctx context.Context, call types.Content, messages []types.OpenAIMessage) (bool, string) {
+	requestID := getRequestID(ctx)
+	
+	if s.shouldLog() {
+		log.Printf("🔍[%s] Using pattern-based ExitPlanMode validation", requestID)
 	}
 	
 	// Check 1: Analyze plan content for completion indicators (high priority)
 	if s.hasCompletionIndicators(call) {
 		if s.shouldLog() {
-			log.Printf("🚫[%s] ExitPlanMode blocked: completion indicators in plan content", requestID)
+			log.Printf("🚫[%s] ExitPlanMode blocked by patterns: completion indicators in plan content", requestID)
 		}
 		return true, "post-completion summary"
 	}
@@ -1912,19 +2062,19 @@ func (s *Service) ValidateExitPlanMode(ctx context.Context, call types.Content, 
 		// Additional check: is this likely a summary rather than a new plan?
 		if s.looksLikeSummaryContent(call) {
 			if s.shouldLog() {
-				log.Printf("🚫[%s] ExitPlanMode blocked: %d recent implementation tool calls + summary-like content", requestID, implementationCount)
+				log.Printf("🚫[%s] ExitPlanMode blocked by patterns: %d recent implementation tool calls + summary-like content", requestID, implementationCount)
 			}
 			return true, "post-implementation usage"
 		} else {
 			// This might be legitimate planning for next steps after previous work
 			if s.shouldLog() {
-				log.Printf("ℹ️[%s] ExitPlanMode allowed: %d recent implementation tool calls but content appears to be forward-looking planning", requestID, implementationCount)
+				log.Printf("ℹ️[%s] ExitPlanMode allowed by patterns: %d recent implementation tool calls but content appears to be forward-looking planning", requestID, implementationCount)
 			}
 		}
 	}
 	
 	if s.shouldLog() {
-		log.Printf("✅[%s] ExitPlanMode allowed: valid planning usage", requestID)
+		log.Printf("✅[%s] ExitPlanMode allowed by patterns: valid planning usage", requestID)
 	}
 	return false, ""
 }
@@ -1945,18 +2095,35 @@ func (s *Service) hasCompletionIndicators(call types.Content) bool {
 	
 	// Define completion indicators that suggest post-completion usage
 	completionIndicators := []string{
-		"✅",
+		"✅", "☑", "✓",  // Visual indicators
 		"completed successfully", 
 		"all tasks completed",
+		"implementation completed",  // Added for test case
 		"implementation finished",
 		"work is done",
 		"ready for production",
 		"ready for deployment",
 		"ready for review",
+		"is now ready",             // Added for test case  
+		"are now ready",            // Plural version
 		"all functionality is working",
 		"summary of implementation",
 		"summary of changes",
 		"everything is complete",
+		"i've successfully",        // Real case: "I've successfully updated"
+		"i have successfully",      // Expanded version
+		"the implementation included", // Real case pattern
+		"the changes enable",       // Real case: result-focused language
+		"changes enable",           // Shorter version  
+		"added comprehensive tests", // Real case pattern
+		"successfully updated",     // Past tense success
+		"successfully implemented", // Past tense success
+		"successfully added",       // Past tense success
+		"successfully created",     // Past tense success
+		"has been completed",       // For test case
+		"have been completed",      // Plural version
+		"has been implemented",     // Similar pattern
+		"have been implemented",    // Plural version
 	}
 	
 	for _, indicator := range completionIndicators {
