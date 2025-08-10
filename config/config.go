@@ -718,6 +718,11 @@ func (c *Config) RecordEndpointFailure(endpoint string) {
 	c.healthMutex.Lock()
 	defer c.healthMutex.Unlock()
 
+	// Initialize map if nil
+	if c.EndpointHealthMap == nil {
+		c.EndpointHealthMap = make(map[string]*EndpointHealth)
+	}
+
 	health, exists := c.EndpointHealthMap[endpoint]
 	if !exists {
 		health = &EndpointHealth{URL: endpoint}
@@ -758,6 +763,11 @@ func (c *Config) RecordEndpointSuccess(endpoint string) {
 	c.healthMutex.Lock()
 	defer c.healthMutex.Unlock()
 
+	// Initialize map if nil
+	if c.EndpointHealthMap == nil {
+		c.EndpointHealthMap = make(map[string]*EndpointHealth)
+	}
+
 	health, exists := c.EndpointHealthMap[endpoint]
 	if !exists {
 		health = &EndpointHealth{URL: endpoint}
@@ -787,18 +797,16 @@ func (c *Config) GetHealthySmallModelEndpoint() string {
 	}
 
 	// Try to find a healthy endpoint, starting from current index
-	startIndex := c.smallModelIndex
-	for i := 0; i < len(c.SmallModelEndpoints); i++ {
+	attempts := 0
+	maxAttempts := len(c.SmallModelEndpoints)
+	
+	for attempts < maxAttempts {
 		endpoint := c.SmallModelEndpoints[c.smallModelIndex]
 		c.smallModelIndex = (c.smallModelIndex + 1) % len(c.SmallModelEndpoints)
+		attempts++
 
 		if c.IsEndpointHealthy(endpoint) {
 			return endpoint
-		}
-
-		// If we've cycled through all endpoints, break to avoid infinite loop
-		if c.smallModelIndex == startIndex {
-			break
 		}
 	}
 
@@ -819,24 +827,32 @@ func (c *Config) GetHealthyToolCorrectionEndpoint() string {
 	}
 
 	// Try to find a healthy endpoint, starting from current index
-	startIndex := c.toolCorrectionIndex
-	for i := 0; i < len(c.ToolCorrectionEndpoints); i++ {
+	attempts := 0
+	maxAttempts := len(c.ToolCorrectionEndpoints)
+	
+	for attempts < maxAttempts {
 		endpoint := c.ToolCorrectionEndpoints[c.toolCorrectionIndex]
 		c.toolCorrectionIndex = (c.toolCorrectionIndex + 1) % len(c.ToolCorrectionEndpoints)
+		attempts++
 
 		if c.IsEndpointHealthy(endpoint) {
+			log.Printf("🎯 Selected healthy tool correction endpoint: %s", endpoint)
 			return endpoint
-		}
-
-		// If we've cycled through all endpoints, break to avoid infinite loop
-		if c.toolCorrectionIndex == startIndex {
-			break
+		} else {
+			failureCount, circuitOpen, nextRetry, exists := c.GetEndpointHealthDebug(endpoint)
+			if exists {
+				log.Printf("⚠️ Skipping unhealthy endpoint: %s (failures: %d, circuit: %v, retry: %v)", 
+					endpoint, failureCount, circuitOpen, nextRetry)
+			} else {
+				log.Printf("⚠️ Skipping endpoint with no health info: %s", endpoint)
+			}
 		}
 	}
 
 	// If no healthy endpoints found, return the next one anyway (last resort)
 	endpoint := c.ToolCorrectionEndpoints[c.toolCorrectionIndex]
 	c.toolCorrectionIndex = (c.toolCorrectionIndex + 1) % len(c.ToolCorrectionEndpoints)
+	log.Printf("⚠️ No healthy tool correction endpoints found, using fallback: %s", endpoint)
 	return endpoint
 }
 

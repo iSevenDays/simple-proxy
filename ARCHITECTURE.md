@@ -1,10 +1,36 @@
 # Simple Proxy Architecture
 
-A Claude Code proxy that transforms Anthropic API requests to OpenAI-compatible format with extensive customization capabilities.
+A Claude Code proxy that transforms Anthropic API requests to OpenAI-compatible format with extensive customization capabilities and intelligent ExitPlanMode misuse prevention.
 
 ## Overview
 
-The Simple Proxy acts as a translation layer between Claude Code (Anthropic API format) and OpenAI-compatible model providers. It provides comprehensive request/response transformation, tool customization, system message overrides, and intelligent model routing.
+The Simple Proxy acts as a translation layer between Claude Code (Anthropic API format) and OpenAI-compatible model providers. It provides comprehensive request/response transformation, tool customization, system message overrides, and intelligent model routing with sophisticated workflow-aware tool necessity detection.
+
+## Key Innovation: Dual-Layer ExitPlanMode Protection
+
+The system implements a **dual-layer protection mechanism** to prevent ExitPlanMode misuse at the root cause:
+
+**Layer 1: Tool Necessity Detection** - Prevents inappropriate forced tool usage
+**Layer 2: Context-Aware Filtering** - Removes ExitPlanMode when inappropriate
+
+```mermaid
+graph TD
+    A[User Request] --> B{DetectToolNecessity}
+    
+    B --> C[Research/Diagnostic]
+    B --> D[Clear Implementation]
+    
+    C --> E[tool_choice=optional]
+    D --> F[tool_choice=required]
+    
+    E --> G[Natural Flow + Context Filtering]
+    F --> H[Forced Tools + Available ExitPlanMode]
+    
+    G --> I[✅ No ExitPlanMode Misuse]
+    H --> J[✅ Appropriate Tool Usage]
+```
+
+This intelligent system recognizes that commands like "fix bug" or "debug error" require investigation phases before implementation, preventing premature tool forcing that leads to inappropriate ExitPlanMode usage.
 
 ## Core Architecture
 
@@ -38,14 +64,14 @@ The Simple Proxy acts as a translation layer between Claude Code (Anthropic API 
 
 ### 2. Configuration System (`config/config.go`)
 
-**Multi-Source Configuration:**
+**Multi-Source Configuration with Circuit Breaker:**
 ```
 ┌─────────────┐    ┌──────────────────┐    ┌─────────────────┐
 │   .env      │───▶│                  │◀───│ tools_override  │
 │ (required)  │    │  Configuration   │    │     .yaml       │
 └─────────────┘    │     Manager      │    │   (optional)    │
-                   │                  │◀───┤                 │
-┌─────────────┐    │                  │    │ system_overrides│
+                   │  + Circuit       │◀───┤                 │
+┌─────────────┐    │    Breaker       │    │ system_overrides│
 │ Environment │───▶│                  │    │     .yaml       │
 │ Variables   │    └──────────────────┘    │   (optional)    │
 └─────────────┘                            └─────────────────┘
@@ -433,9 +459,9 @@ type CircuitBreakerConfig struct {
 - **Automatic Recovery**: Successful requests reset failure counts and close circuits
 - **Graceful Fallback**: Returns endpoint even when all are marked unhealthy
 
-### Tool Correction Service with Multi-Endpoint Failover
+### Tool Correction Service with LLM-Based Validation
 
-**Enhanced Architecture with Circuit Breaker:**
+**Enhanced Architecture with Circuit Breaker and Intelligence:**
 ```
 ┌─────────────────┐
 │ Tool Calls      │
@@ -443,7 +469,12 @@ type CircuitBreakerConfig struct {
 └─────────┬───────┘
           │
           ▼
-┌─────────────────┐
+┌─────────────────┐    ┌─────────────────┐
+│ LLM-Based Tool  │───▶│ Circuit Breaker │
+│ Validation      │    │ Multi-Endpoint  │
+│ & ExitPlanMode  │◀───│ Management      │
+│ Analysis        │    │                 │
+└─────────────────┘    └─────────────────┘
 │ HasToolCalls()  │
 │ Check           │
 └─────────┬───────┘
@@ -612,7 +643,7 @@ Reason:    Client/server separation requires local file access via Read tool
 **Problem Solved:**
 Claude Code occasionally misuses the ExitPlanMode tool as a completion summary after implementation work, instead of using it for planning before implementation. This leads to confusing conversation flows where the tool is used to report finished work rather than outline upcoming work.
 
-**Architecture (Hybrid LLM + Pattern Validation):**
+**Architecture (LLM-Based with Context-Aware Tool Filtering):**
 ```
 ┌─────────────────┐
 │ ExitPlanMode    │
@@ -710,6 +741,103 @@ Claude Code occasionally misuses the ExitPlanMode tool as a completion summary a
 - **Circuit Breaker**: Uses existing failover and retry mechanisms  
 - **Educational Responses**: Provides guidance when blocking inappropriate usage
 
+### ExitPlanMode Intelligent Validation System
+
+**LLM-Based Context Analysis:**
+```
+User Request → Context Analysis → Tool Filtering Decision
+     │                │                    │
+     │                ▼                    ▼
+     │        ┌─────────────────┐   ┌──────────────┐
+     │        │ Real LLM Model  │   │ Remove       │
+     │        │ (qwen2.5-coder) │   │ ExitPlanMode │
+     │        │                 │   │ from Tools   │
+     │        │ FILTER/KEEP     │   │              │
+     │        └─────────────────┘   └──────────────┘
+     │
+     └─── "read architecture md" → FILTER
+          "implement feature X"  → KEEP
+```
+
+**Key Improvements:**
+- **Intelligent Context Analysis**: Replaced pattern-based validation with real LLM reasoning
+- **Conservative Fallback**: When LLM unavailable, allows usage to prevent blocking legitimate cases
+- **Root Cause Fix**: Prevents ExitPlanMode availability for research/analysis requests at source
+- **Circuit Breaker Integration**: 10s timeout + aggressive failover for test optimization
+- **Performance Optimized**: Endpoint health checking + reordering for faster tests
+
+### Tool Necessity Detection System
+
+**Problem Solved:**
+Prevents inappropriate ExitPlanMode usage at the root cause by intelligently determining when `tool_choice="required"` should be set versus allowing natural conversation flow. This system recognizes that diagnostic and investigative commands require understanding phases before implementation.
+
+**LLM-Based Workflow Analysis:**
+The system uses real LLM reasoning to classify user requests into workflow phases, demonstrating sophisticated understanding that commands like "fix bug" or "debug error" inherently contain investigation phases that should not be forced into tool usage.
+
+**Architecture:**
+```
+User Request → DetectToolNecessity LLM → Classification → tool_choice Decision
+                       ↓
+            ┌─────────────────────────────────┐
+            │ Workflow Intelligence           │
+            │                                 │
+            │ Research/Analysis → optional    │
+            │ Diagnostic/Debug → optional     │  
+            │ Clear Implementation → required │
+            │ Mixed Workflow → optional       │
+            └─────────────────────────────────┘
+```
+
+**Request Classification Examples:**
+```yaml
+Research_Requests: # tool_choice = optional
+  - "read the README file and tell me about the project"
+  - "analyze the authentication system and explain how it works"
+  - "check what's in the logs directory and summarize errors"
+
+Diagnostic_Workflows: # tool_choice = optional (investigation-first)
+  - "fix the authentication bug by updating middleware"
+  - "run the tests and fix any failing ones"
+  - "debug the memory leak in the application"
+  - "resolve the performance issues in the API"
+
+Clear_Implementation: # tool_choice = required
+  - "create a new API endpoint for user management"
+  - "add a function to calculate tax rates"
+  - "implement user registration validation"
+
+Mixed_Workflows: # tool_choice = optional (analysis phase dominates)
+  - "analyze the current auth system and implement OAuth"
+  - "help me plan the architecture for microservices"
+```
+
+**Integration Points:**
+- **Request Handler**: `proxy/handler.go:160-169` - Sets tool_choice before provider routing
+- **Prompt Engineering**: Enhanced system message with ExitPlanMode context explanation
+- **Error Handling**: Graceful fallback that defaults to optional when LLM unavailable
+- **Circuit Breaker**: Uses same failover mechanisms as correction system
+- **Test Infrastructure**: Real LLM testing with centralized tool definitions
+
+**Root Cause Prevention Flow:**
+```
+1. Research Request → DetectToolNecessity → tool_choice=optional → Natural Flow → No Forced ExitPlanMode ✅
+2. Diagnostic Request → DetectToolNecessity → tool_choice=optional → Investigation First → Appropriate Workflow ✅  
+3. Implementation Request → DetectToolNecessity → tool_choice=required → Force Tools → ExitPlanMode Available ✅
+4. Fallback Layer → Context Analysis → Filter ExitPlanMode → Additional Protection ✅
+```
+
+**Key Technical Improvements:**
+- **Enhanced LLM Prompting**: Explicit ExitPlanMode explanation in system message
+- **Graceful Error Handling**: `return false, nil` instead of propagating errors
+- **Workflow Intelligence**: Recognition of multi-phase operations (investigate → implement)
+- **Conservative Fallback**: Defaults to allowing natural conversation when uncertain
+
+**Performance Characteristics:**
+- **Single LLM Call**: Minimal overhead with 10-token response limit
+- **Circuit Breaker Protected**: Automatic failover with health-ordered endpoints
+- **Test Optimized**: 100ms backoff for faster test execution
+- **Centralized Tool Definitions**: Consistent test infrastructure using `types.GetFallbackToolSchema()`
+
 ## Data Flow
 
 ### Request Flow
@@ -718,11 +846,15 @@ Claude Code occasionally misuses the ExitPlanMode tool as a completion summary a
 2. **Parsing**: JSON unmarshal to `AnthropicRequest`
 3. **Model Mapping**: Determine target provider and endpoint
 4. **System Override**: Apply system message modifications
-5. **Tool Processing**: Filter tools and apply description overrides
-6. **Schema Restoration**: Detect and auto-correct corrupted tool schemas
-7. **Transformation**: Convert to OpenAI format
-8. **Routing**: Send to appropriate provider endpoint
-9. **Response Handling**: Process streaming or non-streaming response
+5. **Context-Aware Tool Filtering**: Remove inappropriate tools (e.g., ExitPlanMode for research)
+6. **Tool Processing**: Apply description overrides and filter unwanted tools
+7. **Tool Necessity Analysis**: Determine if `tool_choice="required"` should be set
+   - Research/Diagnostic requests → `optional` (natural conversation flow)
+   - Clear implementation requests → `required` (force tool usage)
+8. **Schema Restoration**: Detect and auto-correct corrupted tool schemas
+9. **Transformation**: Convert to OpenAI format with appropriate tool_choice
+10. **Routing**: Send to appropriate provider endpoint
+11. **Response Handling**: Process streaming or non-streaming response
 
 ### Response Flow
 

@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"claude-proxy/config"
+	"claude-proxy/correction"
 	"claude-proxy/logger"
 	"claude-proxy/types"
 	"context"
@@ -505,13 +506,23 @@ func TransformAnthropicToOpenAI(ctx context.Context, req types.AnthropicRequest,
 
 	// Transform tools
 	if len(req.Tools) > 0 {
-		// Filter tools based on skip list
+		// Context-aware tool filtering: Analyze conversation to determine appropriate tools
+		contextBasedSkipTools := make([]string, len(cfg.SkipTools))
+		copy(contextBasedSkipTools, cfg.SkipTools)
+		
+		// Check if conversation suggests research/analysis rather than planning
+		if shouldSkipExitPlanMode(ctx, req.Messages, cfg) {
+			contextBasedSkipTools = append(contextBasedSkipTools, "ExitPlanMode")
+			loggerInstance.Info("🔍 Context analysis: ExitPlanMode filtered out (research/analysis detected)")
+		}
+		
+		// Filter tools based on skip list (including context-based additions)
 		var filteredTools []types.Tool
 		var skippedTools []string
 		
 		for _, tool := range req.Tools {
 			shouldSkip := false
-			for _, skipTool := range cfg.SkipTools {
+			for _, skipTool := range contextBasedSkipTools {
 				if tool.Name == skipTool {
 					shouldSkip = true
 					skippedTools = append(skippedTools, tool.Name)
@@ -665,4 +676,67 @@ func TransformOpenAIToAnthropic(ctx context.Context, resp *types.OpenAIResponse,
 		len(content), stopReason)
 
 	return anthropicResp, nil
+}
+
+// shouldSkipExitPlanMode analyzes conversation context using LLM to determine if ExitPlanMode should be filtered out
+// Root cause fix: Prevent ExitPlanMode availability during research/analysis tasks
+func shouldSkipExitPlanMode(ctx context.Context, messages []types.Message, cfg *config.Config) bool {
+	// Validate inputs - critical for preventing nil pointer panics
+	if cfg == nil || len(messages) == 0 {
+		return false
+	}
+	
+	// Extract the user's request (first message)
+	var userRequest string
+	for _, msg := range messages {
+		if msg.Role == "user" {
+			userRequest = extractUserText(msg)
+			break // Only check the first user message for the initial intent
+		}
+	}
+	
+	if strings.TrimSpace(userRequest) == "" {
+		return false
+	}
+	
+	// Use LLM analysis for more nuanced understanding
+	return shouldSkipExitPlanModeLLM(ctx, strings.TrimSpace(userRequest), cfg)
+}
+
+// shouldSkipExitPlanModeLLM uses LLM analysis to determine if ExitPlanMode should be filtered out
+func shouldSkipExitPlanModeLLM(ctx context.Context, userRequest string, cfg *config.Config) bool {
+	// Validate inputs - cfg already validated by caller, but check userRequest
+	if strings.TrimSpace(userRequest) == "" {
+		return false
+	}
+	
+	// Use the correction service's dedicated context analysis method
+	correctionService := correction.NewService(cfg, cfg.ToolCorrectionAPIKey, true, cfg.CorrectionModel, false)
+	
+	// Use the specialized AnalyzeRequestContext method
+	shouldFilter, err := correctionService.AnalyzeRequestContext(ctx, userRequest)
+	if err != nil {
+		// If LLM analysis fails, conservative fallback - don't filter
+		return false
+	}
+	
+	return shouldFilter
+}
+
+// extractUserText extracts text content from a message, handling both string and []Content formats
+// This helper function improves maintainability and reduces code duplication
+func extractUserText(msg types.Message) string {
+	switch content := msg.Content.(type) {
+	case string:
+		return content
+	case []types.Content:
+		var texts []string
+		for _, c := range content {
+			if c.Type == "text" && c.Text != "" {
+				texts = append(texts, c.Text)
+			}
+		}
+		return strings.Join(texts, " ")
+	}
+	return ""
 }

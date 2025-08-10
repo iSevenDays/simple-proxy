@@ -182,6 +182,9 @@ func (s *Service) CorrectToolCalls(ctx context.Context, toolCalls []types.Conten
 		const maxRetries = 3
 		retryCount := 0
 		var currentCall = call
+		
+		// Memory management: Track original for potential reset
+		originalCall := call
 
 		for retryCount <= maxRetries {
 			// Stage 0: Comprehensive validation
@@ -214,7 +217,10 @@ func (s *Service) CorrectToolCalls(ctx context.Context, toolCalls []types.Conten
 					log.Printf("🔧[%s] Final attempt had missing: %v, invalid: %v", 
 						requestID, validation.MissingParams, validation.InvalidParams)
 				}
-				correctedCalls = append(correctedCalls, call) // Use original call
+				
+				// Memory management: Reset to original and clear accumulated state
+				currentCall = originalCall
+				correctedCalls = append(correctedCalls, originalCall) // Use original call
 				break // Exit retry loop
 			}
 
@@ -351,8 +357,10 @@ func (s *Service) CorrectToolCalls(ctx context.Context, toolCalls []types.Conten
 					log.Printf("❌[%s] Parameter correction failed: %v", requestID, err)
 					log.Printf("🔍[%s] Retrying with current call", requestID)
 				}
+				// Memory management: Reset to original on failure to prevent accumulation
+				currentCall = originalCall
 				retryCount++
-				continue // Retry with current call
+				continue // Retry with original call
 			} else {
 				if s.shouldLog() {
 					log.Printf("🔍[%s] Corrected tool call: name=%s, input=%v", requestID, correctedCall.Name, correctedCall.Input)
@@ -392,8 +400,10 @@ func (s *Service) CorrectToolCalls(ctx context.Context, toolCalls []types.Conten
 				if s.shouldLog() {
 					log.Printf("❌[%s] LLM correction failed: %v", requestID, err)
 				}
+				// Memory management: Reset to original on failure to prevent accumulation
+				currentCall = originalCall
 				retryCount++
-				continue // Retry
+				continue // Retry with original call
 			} else {
 				if s.shouldLog() {
 					// Log detailed parameter changes
@@ -437,7 +447,7 @@ func (s *Service) DetectToolNecessity(ctx context.Context, userMessage string, a
 		Messages: []types.OpenAIMessage{
 			{
 				Role:    "system",
-				Content: "You are a tool necessity analyzer. Your job is to determine if a user request requires tools to be executed. Respond with ONLY 'YES' if tools should be required, or 'NO' if the request can be answered without tools.",
+				Content: "You are a tool necessity analyzer for Claude Code preventing ExitPlanMode misuse. Your job is to determine if a user request requires forced tool usage (tool_choice='required'). Research/analysis requests should return 'NO' to allow natural conversation flow and prevent inappropriate ExitPlanMode usage as an escape hatch. Implementation/creation requests should return 'YES' when tools are actually needed. Respond with ONLY 'YES' or 'NO'.",
 			},
 			{
 				Role:    "user",
@@ -452,14 +462,17 @@ func (s *Service) DetectToolNecessity(ctx context.Context, userMessage string, a
 	response, err := s.sendCorrectionRequest(req)
 	if err != nil {
 		if s.shouldLog() {
-			log.Printf("⚠️[%s] Tool necessity detection failed: %v", requestID, err)
+			log.Printf("⚠️[%s] Tool necessity detection failed, defaulting to optional: %v", requestID, err)
 		}
-		return false, err
+		return false, nil // Fail safe: don't force tools if analysis fails
 	}
 	
 	// Parse response
 	if len(response.Choices) == 0 {
-		return false, fmt.Errorf("no response from tool necessity detection")
+		if s.shouldLog() {
+			log.Printf("⚠️[%s] No response from tool necessity detection, defaulting to optional", requestID)
+		}
+		return false, nil // Fail safe: don't force tools if no response
 	}
 	
 	content := strings.TrimSpace(strings.ToUpper(response.Choices[0].Message.Content))
@@ -474,8 +487,7 @@ func (s *Service) DetectToolNecessity(ctx context.Context, userMessage string, a
 
 // buildExitPlanModeValidationPrompt creates the prompt for ExitPlanMode usage validation
 func (s *Service) buildExitPlanModeValidationPrompt(planContent string, messages []types.OpenAIMessage) string {
-	// Analyze recent conversation for context
-	implementationCount := s.countRecentImplementationWork(messages)
+	// Get recent tool names for context
 	recentTools := s.getRecentToolNames(messages, 10) // Get last 10 tools used
 	
 	return fmt.Sprintf(`Analyze this ExitPlanMode usage and determine if it's appropriate:
@@ -484,7 +496,7 @@ PLAN CONTENT:
 "%s"
 
 CONVERSATION CONTEXT:
-- Recent implementation tools used (%d total): %s
+- Recent tools used: %s
 - Total messages in conversation: %d
 
 RULES FOR EXITPLANMODE:
@@ -507,7 +519,6 @@ ANALYSIS CRITERIA:
 
 Respond with ONLY "BLOCK" or "ALLOW".`, 
 		planContent, 
-		implementationCount, 
 		strings.Join(recentTools, ", "),
 		len(messages))
 }
@@ -552,28 +563,47 @@ func (s *Service) buildToolNecessityPrompt(userMessage string, availableTools []
 		toolNames = append(toolNames, tool.Name)
 	}
 	
-	return fmt.Sprintf(`Analyze this user request and determine if it requires using tools to complete:
+	return fmt.Sprintf(`Analyze this user request and determine if tools should be REQUIRED (tool_choice="required") to complete it:
 
 USER REQUEST: "%s"
 
 AVAILABLE TOOLS: %s
 
-Examples of requests that REQUIRE tools (answer YES):
-- "check the file contents"
-- "read the code in main.go" 
-- "search for function definitions"
-- "run this command"
-- "find all instances of X"
-- "create/write/edit a file"
-- "execute tests"
-- "grep for patterns"
+CRITICAL DISTINCTION: 
+- YES = Tools must be used (force tool_choice="required")
+- NO = Tools are optional (allow natural conversation, model can choose)
 
-Examples of requests that DON'T require tools (answer NO):
-- "explain how X works"
-- "what is the difference between X and Y"
-- "help me understand this concept"
-- "describe the architecture"
-- "what are best practices for X"
+Examples that REQUIRE tools (answer YES):
+- "create a new file with X content"
+- "edit file Y to add Z functionality" 
+- "run this specific command"
+- "implement feature X" (clear implementation task)
+- "install dependencies and configure"
+- "execute tests and show results"
+
+Examples that should NOT force tools (answer NO):
+- "read file X and tell me what it does" (research → explanation)
+- "check the logs and explain what happened" (analysis → summary)
+- "look at the code and suggest improvements" (review → recommendations)  
+- "find all instances of X and tell me about the pattern" (search → analysis)
+- "examine the architecture and describe the design" (investigation → report)
+- "analyze the codebase structure" (research → understanding)
+
+REASONING: Analysis/research requests should allow the model to:
+1. Use tools for investigation if needed
+2. Provide natural text responses/summaries without being forced to use more tools
+3. Avoid inappropriate ExitPlanMode usage as an "escape hatch"
+
+EXITPLANMODE CONTEXT:
+ExitPlanMode is a tool that creates implementation plans. When tool_choice="required", the model is FORCED to use available tools. For research/analysis requests, this often leads to inappropriate ExitPlanMode usage because:
+- The model needs to use SOME tool to satisfy the "required" constraint
+- ExitPlanMode becomes the "escape hatch" when no other tools fit
+- This results in implementation plans for simple research questions
+- Example: "read architecture.md" → forced to use ExitPlanMode → creates unnecessary implementation plan
+
+SOLUTION: Research requests should return NO to allow optional tool usage, letting the model naturally use Read tools for investigation and provide text responses without being forced into ExitPlanMode.
+
+KEY PRINCIPLE: If the request implies "do X and then tell me about it" or ends with analysis/explanation/summary, answer NO to allow natural conversation flow.
 
 Respond with ONLY "YES" or "NO".`, userMessage, strings.Join(toolNames, ", "))
 }
@@ -985,8 +1015,9 @@ func (s *Service) sendCorrectionRequest(req types.OpenAIRequest) (*types.OpenAIR
 		httpReq.Header.Set("Content-Type", "application/json")
 		httpReq.Header.Set("Authorization", "Bearer "+s.apiKey)
 
+		// Use shorter timeout for faster failover (good for both prod and tests)
 		client := &http.Client{
-			Timeout: 30 * time.Second, // Shorter timeout for faster failover
+			Timeout: 10 * time.Second, // Reduced from 30s to 10s for faster failover
 		}
 		
 		resp, err := client.Do(httpReq)
@@ -2009,18 +2040,18 @@ func (s *Service) ValidateExitPlanMode(ctx context.Context, call types.Content, 
 	response, err := s.sendCorrectionRequest(req)
 	if err != nil {
 		if s.shouldLog() {
-			log.Printf("⚠️[%s] ExitPlanMode LLM validation failed, falling back to pattern-based validation: %v", requestID, err)
+			log.Printf("⚠️[%s] ExitPlanMode LLM validation failed, conservative fallback (allow usage): %v", requestID, err)
 		}
-		// Fall back to pattern-based validation when LLM is unavailable
-		return s.validateExitPlanModeWithPatterns(ctx, call, messages)
+		// Conservative fallback: allow ExitPlanMode if LLM is unavailable
+		return false, ""
 	}
 	
 	// Parse response
 	if len(response.Choices) == 0 {
 		if s.shouldLog() {
-			log.Printf("⚠️[%s] ExitPlanMode LLM validation no response, falling back to pattern-based validation", requestID)
+			log.Printf("⚠️[%s] ExitPlanMode LLM validation no response, conservative fallback (allow usage)", requestID)
 		}
-		return s.validateExitPlanModeWithPatterns(ctx, call, messages)
+		return false, ""
 	}
 	
 	content := strings.TrimSpace(strings.ToUpper(response.Choices[0].Message.Content))
@@ -2038,192 +2069,6 @@ func (s *Service) ValidateExitPlanMode(ctx context.Context, call types.Content, 
 		}
 		return false, ""
 	}
-}
-
-// validateExitPlanModeWithPatterns provides pattern-based validation as fallback
-func (s *Service) validateExitPlanModeWithPatterns(ctx context.Context, call types.Content, messages []types.OpenAIMessage) (bool, string) {
-	requestID := getRequestID(ctx)
-	
-	if s.shouldLog() {
-		log.Printf("🔍[%s] Using pattern-based ExitPlanMode validation", requestID)
-	}
-	
-	// Check 1: Analyze plan content for completion indicators (high priority)
-	if s.hasCompletionIndicators(call) {
-		if s.shouldLog() {
-			log.Printf("🚫[%s] ExitPlanMode blocked by patterns: completion indicators in plan content", requestID)
-		}
-		return true, "post-completion summary"
-	}
-	
-	// Check 2: Only block based on implementation work if the plan content also suggests completion
-	implementationCount := s.countRecentImplementationWork(messages)
-	if implementationCount >= 3 {
-		// Additional check: is this likely a summary rather than a new plan?
-		if s.looksLikeSummaryContent(call) {
-			if s.shouldLog() {
-				log.Printf("🚫[%s] ExitPlanMode blocked by patterns: %d recent implementation tool calls + summary-like content", requestID, implementationCount)
-			}
-			return true, "post-implementation usage"
-		} else {
-			// This might be legitimate planning for next steps after previous work
-			if s.shouldLog() {
-				log.Printf("ℹ️[%s] ExitPlanMode allowed by patterns: %d recent implementation tool calls but content appears to be forward-looking planning", requestID, implementationCount)
-			}
-		}
-	}
-	
-	if s.shouldLog() {
-		log.Printf("✅[%s] ExitPlanMode allowed by patterns: valid planning usage", requestID)
-	}
-	return false, ""
-}
-
-// hasCompletionIndicators checks if the plan content contains completion indicators
-func (s *Service) hasCompletionIndicators(call types.Content) bool {
-	plan, exists := call.Input["plan"]
-	if !exists {
-		return false
-	}
-	
-	planStr, ok := plan.(string)
-	if !ok {
-		return false
-	}
-	
-	planLower := strings.ToLower(planStr)
-	
-	// Define completion indicators that suggest post-completion usage
-	completionIndicators := []string{
-		"✅", "☑", "✓",  // Visual indicators
-		"completed successfully", 
-		"all tasks completed",
-		"implementation completed",  // Added for test case
-		"implementation finished",
-		"work is done",
-		"ready for production",
-		"ready for deployment",
-		"ready for review",
-		"is now ready",             // Added for test case  
-		"are now ready",            // Plural version
-		"all functionality is working",
-		"summary of implementation",
-		"summary of changes",
-		"everything is complete",
-		"i've successfully",        // Real case: "I've successfully updated"
-		"i have successfully",      // Expanded version
-		"the implementation included", // Real case pattern
-		"the changes enable",       // Real case: result-focused language
-		"changes enable",           // Shorter version  
-		"added comprehensive tests", // Real case pattern
-		"successfully updated",     // Past tense success
-		"successfully implemented", // Past tense success
-		"successfully added",       // Past tense success
-		"successfully created",     // Past tense success
-		"has been completed",       // For test case
-		"have been completed",      // Plural version
-		"has been implemented",     // Similar pattern
-		"have been implemented",    // Plural version
-	}
-	
-	for _, indicator := range completionIndicators {
-		if strings.Contains(planLower, indicator) {
-			return true
-		}
-	}
-	
-	return false
-}
-
-// looksLikeSummaryContent checks if plan content appears to be summarizing past work
-func (s *Service) looksLikeSummaryContent(call types.Content) bool {
-	plan, exists := call.Input["plan"]
-	if !exists {
-		return false
-	}
-	
-	planStr, ok := plan.(string)
-	if !ok {
-		return false
-	}
-	
-	planLower := strings.ToLower(planStr)
-	
-	// Summary indicators (different from completion indicators)
-	summaryIndicators := []string{
-		"summary of",
-		"has been implemented",
-		"have been implemented", 
-		"changes made",
-		"work completed",
-		"features added",
-		"implementation details",
-		"what was done",
-		"accomplished",
-		"delivered",
-		"finished implementing",
-	}
-	
-	summaryCount := 0
-	for _, indicator := range summaryIndicators {
-		if strings.Contains(planLower, indicator) {
-			summaryCount++
-		}
-	}
-	
-	// Also check for past tense verbs indicating completed work
-	pastTenseIndicators := []string{
-		"implemented",
-		"added",
-		"created",
-		"updated",  
-		"fixed",
-		"completed",
-		"built",
-		"deployed",
-		"tested",
-	}
-	
-	pastTenseCount := 0
-	for _, indicator := range pastTenseIndicators {
-		if strings.Contains(planLower, indicator) {
-			pastTenseCount++
-		}
-	}
-	
-	// If we have multiple summary indicators or many past tense verbs, likely a summary
-	return summaryCount >= 2 || pastTenseCount >= 4
-}
-
-// countRecentImplementationWork analyzes recent messages for implementation tool usage
-func (s *Service) countRecentImplementationWork(messages []types.OpenAIMessage) int {
-	// Define tools that indicate implementation work (not research)
-	implementationTools := map[string]bool{
-		"Write":     true,
-		"Edit":      true,
-		"MultiEdit": true,
-		"Bash":      true,
-		"TodoWrite": true,
-	}
-	
-	// Analyze recent messages (last 15 messages or all if fewer)
-	startIndex := 0
-	if len(messages) > 15 {
-		startIndex = len(messages) - 15
-	}
-	
-	implementationCount := 0
-	for i := startIndex; i < len(messages); i++ {
-		if messages[i].ToolCalls != nil {
-			for _, toolCall := range messages[i].ToolCalls {
-				if implementationTools[toolCall.Function.Name] {
-					implementationCount++
-				}
-			}
-		}
-	}
-	
-	return implementationCount
 }
 
 // checkTodoWriteStructure validates TodoWrite internal structure
@@ -2253,3 +2098,89 @@ func (s *Service) checkTodoWriteStructure(call types.Content) bool {
 	}
 	return false
 }
+
+// AnalyzeRequestContext analyzes the user request to determine if ExitPlanMode should be filtered out
+// Returns (shouldFilter, error) where shouldFilter=true means ExitPlanMode should not be available
+func (s *Service) AnalyzeRequestContext(ctx context.Context, userRequest string) (bool, error) {
+	requestID := getRequestID(ctx)
+	
+	if !s.enabled {
+		return false, nil // Skip analysis if correction service disabled
+	}
+	
+	if strings.TrimSpace(userRequest) == "" {
+		return false, nil // Don't filter for empty requests
+	}
+	
+	if s.shouldLog() {
+		log.Printf("🔍[%s] Analyzing request context for ExitPlanMode filtering", requestID)
+	}
+	
+	// Build analysis prompt
+	prompt := fmt.Sprintf(`Analyze this user request: "%s"
+
+ExitPlanMode creates implementation plans BEFORE starting work.
+
+FILTER ExitPlanMode (respond "FILTER") for:
+- Research: "read X", "analyze Y", "examine Z"  
+- Information: "tell me about", "explain", "what is"
+- Investigation: "check", "review", "investigate"
+
+KEEP ExitPlanMode (respond "KEEP") for:  
+- Implementation: "implement", "create", "build", "develop"
+- Planning: "add feature", "make", "write code"
+
+For mixed requests, consider PRIMARY intent.
+Respond only "FILTER" or "KEEP".`, userRequest)
+	
+	// Create request to correction model
+	req := types.OpenAIRequest{
+		Model: s.modelName,
+		Messages: []types.OpenAIMessage{
+			{
+				Role:    "system",
+				Content: "You are a context analyzer for tool filtering. Respond with ONLY 'FILTER' if ExitPlanMode should be filtered out for this request type, or 'KEEP' if it should remain available.",
+			},
+			{
+				Role:    "user", 
+				Content: prompt,
+			},
+		},
+		MaxTokens:   10, // Very short response needed
+		Temperature: 0.1,
+	}
+	
+	// Send request
+	response, err := s.sendCorrectionRequest(req)
+	if err != nil {
+		if s.shouldLog() {
+			log.Printf("⚠️[%s] Context analysis LLM failed, conservative fallback (don't filter): %v", requestID, err)
+		}
+		// Conservative fallback: don't filter if LLM fails
+		return false, nil
+	}
+	
+	// Parse response
+	if len(response.Choices) == 0 {
+		if s.shouldLog() {
+			log.Printf("⚠️[%s] Context analysis LLM no response, conservative fallback (don't filter)", requestID)
+		}
+		return false, nil
+	}
+	
+	content := strings.TrimSpace(strings.ToUpper(response.Choices[0].Message.Content))
+	shouldFilter := strings.HasPrefix(content, "FILTER")
+	
+	if shouldFilter {
+		if s.shouldLog() {
+			log.Printf("🔍[%s] Context analysis: ExitPlanMode filtered out (research/analysis detected) -> %s", requestID, strings.ToLower(content))
+		}
+		return true, nil
+	} else {
+		if s.shouldLog() {
+			log.Printf("✅[%s] Context analysis: ExitPlanMode kept available (implementation detected) -> %s", requestID, strings.ToLower(content))
+		}
+		return false, nil
+	}
+}
+
