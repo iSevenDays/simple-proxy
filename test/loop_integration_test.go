@@ -113,16 +113,15 @@ func TestLoopDetectionIntegration_TodoWriteLoop(t *testing.T) {
 }
 
 func TestLoopDetectionIntegration_NoLoop(t *testing.T) {
-	// Create a minimal config for testing  
-	cfg := &config.Config{
-		BigModel:              "test-model",
-		BigModelEndpoints:      []string{"http://localhost/v1/completions"},
-		BigModelAPIKey:        "test-key",
-		SmallModel:            "test-small-model",
-		SmallModelEndpoints:    []string{"http://localhost/v1/completions"},
-		SmallModelAPIKey:      "test-key",
-		ToolCorrectionEnabled: false,
-	}
+	// Create a properly initialized config for testing  
+	cfg := config.GetDefaultConfig()
+	cfg.BigModel = "test-model"
+	cfg.BigModelEndpoints = []string{"http://localhost/v1/completions"}
+	cfg.BigModelAPIKey = "test-key"
+	cfg.SmallModel = "test-small-model"
+	cfg.SmallModelEndpoints = []string{"http://localhost/v1/completions"}
+	cfg.SmallModelAPIKey = "test-key"
+	cfg.ToolCorrectionEnabled = false
 
 	// Create handler
 	handler := proxy.NewHandler(cfg, nil)

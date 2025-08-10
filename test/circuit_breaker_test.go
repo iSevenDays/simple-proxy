@@ -1,6 +1,7 @@
 package test
 
 import (
+	"claude-proxy/circuitbreaker"
 	"claude-proxy/config"
 	"testing"
 	"time"
@@ -14,7 +15,7 @@ func TestCircuitBreakerBasicFunctionality(t *testing.T) {
 		"http://192.168.0.46:11434/v1/chat/completions",
 		"http://192.168.0.50:11434/v1/chat/completions",
 	}
-	cfg.CircuitBreaker = config.DefaultCircuitBreakerConfig()
+	cfg.HealthManager = circuitbreaker.NewHealthManager(circuitbreaker.DefaultConfig())
 	
 	// Initialize health map
 	err := initializeConfigForTesting(cfg)
@@ -72,9 +73,13 @@ func TestCircuitBreakerBackoff(t *testing.T) {
 	cfg.ToolCorrectionEndpoints = []string{"http://test:8080"}
 	
 	// Use shorter backoff for testing
-	cfg.CircuitBreaker.BackoffDuration = 100 * time.Millisecond
-	cfg.CircuitBreaker.FailureThreshold = 1 // Open after 1 failure for faster testing
-	cfg.CircuitBreaker.MaxBackoffDuration = 10 * time.Second // Set a proper max for testing
+	testConfig := circuitbreaker.Config{
+		FailureThreshold:   1,                       // Open after 1 failure for faster testing
+		BackoffDuration:    100 * time.Millisecond,  // Very short backoff
+		MaxBackoffDuration: 10 * time.Second,        // Set a proper max for testing
+		ResetTimeout:       1 * time.Minute,
+	}
+	cfg.HealthManager = circuitbreaker.NewHealthManager(testConfig)
 	
 	
 	err := initializeConfigForTesting(cfg)
@@ -92,7 +97,7 @@ func TestCircuitBreakerBackoff(t *testing.T) {
 		cfg.RecordEndpointFailure(endpoint)
 		
 		// Debug: check the health status and internal state
-		t.Logf("Circuit breaker config: threshold=%d, backoff=%v", cfg.CircuitBreaker.FailureThreshold, cfg.CircuitBreaker.BackoffDuration)
+		t.Logf("Circuit breaker config: threshold=%d, backoff=%v", testConfig.FailureThreshold, testConfig.BackoffDuration)
 		
 		// Inspect the endpoint health directly
 		failures, circuitOpen, nextRetry, exists := cfg.GetEndpointHealthDebug(endpoint)
@@ -139,9 +144,13 @@ func TestHealthyEndpointSelection(t *testing.T) {
 		"http://unhealthy:8080",
 		"http://healthy:8080",
 	}
-	cfg.CircuitBreaker.FailureThreshold = 1
-	cfg.CircuitBreaker.BackoffDuration = 2 * time.Second     // Set backoff duration  
-	cfg.CircuitBreaker.MaxBackoffDuration = 10 * time.Second // Set proper max backoff
+	testConfig := circuitbreaker.Config{
+		FailureThreshold:   1,                  // Trigger on first failure
+		BackoffDuration:    2 * time.Second,   // Set backoff duration
+		MaxBackoffDuration: 10 * time.Second,  // Set proper max backoff
+		ResetTimeout:       1 * time.Minute,
+	}
+	cfg.HealthManager = circuitbreaker.NewHealthManager(testConfig)
 	
 	err := initializeConfigForTesting(cfg)
 	if err != nil {
@@ -169,9 +178,13 @@ func TestAllEndpointsUnhealthy(t *testing.T) {
 		"http://unhealthy1:8080",
 		"http://unhealthy2:8080",
 	}
-	cfg.CircuitBreaker.FailureThreshold = 1
-	cfg.CircuitBreaker.BackoffDuration = 2 * time.Second     // Set backoff duration  
-	cfg.CircuitBreaker.MaxBackoffDuration = 10 * time.Second // Set proper max backoff
+	testConfig := circuitbreaker.Config{
+		FailureThreshold:   1,                  // Trigger on first failure
+		BackoffDuration:    2 * time.Second,   // Set backoff duration
+		MaxBackoffDuration: 10 * time.Second,  // Set proper max backoff
+		ResetTimeout:       1 * time.Minute,
+	}
+	cfg.HealthManager = circuitbreaker.NewHealthManager(testConfig)
 	
 	err := initializeConfigForTesting(cfg)
 	if err != nil {
@@ -205,6 +218,9 @@ func TestAllEndpointsUnhealthy(t *testing.T) {
 // initializeConfigForTesting initializes the config for testing (similar to real initialization)
 func initializeConfigForTesting(cfg *config.Config) error {
 	// Initialize the health map like LoadConfigWithEnv does
-	cfg.InitializeEndpointHealthMap()
+	// Initialize endpoints in health manager
+	allEndpoints := append(cfg.BigModelEndpoints, cfg.SmallModelEndpoints...)
+	allEndpoints = append(allEndpoints, cfg.ToolCorrectionEndpoints...)
+	cfg.HealthManager.InitializeEndpoints(allEndpoints)
 	return nil
 }

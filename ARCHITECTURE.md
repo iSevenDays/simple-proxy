@@ -64,24 +64,51 @@ This intelligent system recognizes that commands like "fix bug" or "debug error"
 
 ### 2. Configuration System (`config/config.go`)
 
-**Multi-Source Configuration with Circuit Breaker:**
+**Multi-Source Configuration Management:**
 ```
 ┌─────────────┐    ┌──────────────────┐    ┌─────────────────┐
 │   .env      │───▶│                  │◀───│ tools_override  │
 │ (required)  │    │  Configuration   │    │     .yaml       │
 └─────────────┘    │     Manager      │    │   (optional)    │
-                   │  + Circuit       │◀───┤                 │
-┌─────────────┐    │    Breaker       │    │ system_overrides│
+                   │                  │◀───┤                 │
+┌─────────────┐    │                  │    │ system_overrides│
 │ Environment │───▶│                  │    │     .yaml       │
-│ Variables   │    └──────────────────┘    │   (optional)    │
-└─────────────┘                            └─────────────────┘
+│ Variables   │    └─────────┬────────┘    │   (optional)    │
+└─────────────┘              │             └─────────────────┘
+                             ▼
+                   ┌──────────────────┐
+                   │ Circuit Breaker  │
+                   │ Health Manager   │
+                   │ (circuitbreaker/)│
+                   └──────────────────┘
 ```
 
 **Configuration Features:**
 - **Model Mapping**: Claude model names → Provider models
 - **Dual Provider Support**: Separate big/small model endpoints
-- **Multi-Endpoint Failover**: Comma-separated endpoint lists for correction services
-- **Circuit Breaker**: Configurable failure thresholds and backoff timing
+- **Multi-Endpoint Support**: Comma-separated endpoint lists for all services
+- **Health Manager Integration**: Delegates endpoint health to circuit breaker package
+
+### 3. Circuit Breaker System (`circuitbreaker/`)
+
+**Intelligent Endpoint Management with Success Learning:**
+```
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│ health.go       │    │ breaker.go      │    │ reordering.go   │
+│                 │    │                 │    │                 │
+│ • EndpointHealth│───▶│ • Failure Logic │───▶│ • Success Rates │
+│ • HealthManager │    │ • Circuit State │    │ • Auto Reorder  │
+│ • Success Track │    │ • Endpoint      │    │ • Performance   │
+│                 │    │   Selection     │    │   Optimization  │
+└─────────────────┘    └─────────────────┘    └─────────────────┘
+```
+
+**Enhanced Circuit Breaker Features:**
+- **Success Rate Tracking**: Records success/failure metrics for each endpoint
+- **Intelligent Reordering**: Every 5 minutes, reorders endpoints by success rate  
+- **Health-First Priority**: Healthy endpoints always ranked before unhealthy
+- **Performance Memory**: System learns which endpoints perform best
+- **Configurable Thresholds**: Failure limits, backoff timing, retry intervals
 - **Tool Filtering**: Skip unwanted tools via `SKIP_TOOLS`
 - **Debug Options**: System message printing with `PRINT_SYSTEM_MESSAGE`
 - **Security**: API key masking in logs
@@ -853,8 +880,13 @@ Mixed_Workflows: # tool_choice = optional (analysis phase dominates)
    - Clear implementation requests → `required` (force tool usage)
 8. **Schema Restoration**: Detect and auto-correct corrupted tool schemas
 9. **Transformation**: Convert to OpenAI format with appropriate tool_choice
-10. **Routing**: Send to appropriate provider endpoint
-11. **Response Handling**: Process streaming or non-streaming response
+10. **Intelligent Endpoint Selection**: Circuit breaker system selects optimal endpoint
+    - **Success-Based Reordering**: Endpoints reordered by performance every 5 minutes
+    - **Health-First Priority**: Healthy endpoints always tried before unhealthy
+    - **Circuit Breaker Logic**: Skip endpoints in backoff period
+    - **Performance Memory**: Successful endpoints prioritized for future requests
+11. **Provider Routing**: Send to selected provider endpoint with health monitoring
+12. **Response Handling**: Process streaming or non-streaming response with success tracking
 
 ### Response Flow
 
@@ -865,8 +897,12 @@ Mixed_Workflows: # tool_choice = optional (analysis phase dominates)
    - Skip correction for text-only responses
    - Skip correction for already-valid tool calls
 5. **Tool Correction**: Validate and correct invalid tool calls (when needed)
-6. **Transformation**: Convert back to Anthropic format
-7. **Delivery**: Send final response to client
+6. **Endpoint Health Recording**: Track request success/failure for intelligent routing
+   - **Success**: Increment success count, update last success time, close circuits if needed
+   - **Failure**: Increment failure count, potentially open circuit breaker
+   - **Performance Data**: Update total request counts for success rate calculation
+7. **Transformation**: Convert back to Anthropic format
+8. **Delivery**: Send final response to client
 
 ## Configuration Architecture
 

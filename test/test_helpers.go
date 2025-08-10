@@ -1,6 +1,7 @@
 package test
 
 import (
+	"claude-proxy/circuitbreaker"
 	"claude-proxy/config"
 	"claude-proxy/types"
 	"encoding/json"
@@ -50,7 +51,7 @@ func NewMockConfigProvider(endpoint ...string) *config.Config {
 			ToolCorrectionEndpoints: []string{"http://192.168.0.46:11434/v1/chat/completions", "http://192.168.0.50:11434/v1/chat/completions"},
 			ToolCorrectionAPIKey: "ollama",
 			CorrectionModel: "qwen2.5-coder:latest",
-			CircuitBreaker: getTestCircuitBreakerConfig(),
+			HealthManager: circuitbreaker.NewHealthManager(getTestCircuitBreakerConfig()),
 		}
 	}
 	
@@ -69,7 +70,9 @@ func NewMockConfigProvider(endpoint ...string) *config.Config {
 	cfg.ToolCorrectionEndpoints = reorderEndpointsByHealth(cfg.ToolCorrectionEndpoints)
 	
 	// Use test-optimized circuit breaker settings for faster failover
-	cfg.CircuitBreaker = getTestCircuitBreakerConfig()
+	if cfg.HealthManager == nil {
+		cfg.HealthManager = circuitbreaker.NewHealthManager(getTestCircuitBreakerConfig())
+	}
 	
 	// No tools skipped by default for testing
 	cfg.SkipTools = []string{}
@@ -223,11 +226,39 @@ func createMockAlwaysYesServer(t *testing.T) *httptest.Server {
 }
 // getTestCircuitBreakerConfig returns test-optimized circuit breaker settings
 // Fails fast to avoid long waits in unit tests
-func getTestCircuitBreakerConfig() config.CircuitBreakerConfig {
-	return config.CircuitBreakerConfig{
+func getTestCircuitBreakerConfig() circuitbreaker.Config {
+	return circuitbreaker.Config{
 		FailureThreshold:   1,                       // Open circuit after 1 failure (not 2)
 		BackoffDuration:    100 * time.Millisecond,  // Very short backoff (100ms)
 		MaxBackoffDuration: 1 * time.Second,         // Max 1s wait (not 30s)
+		ResetTimeout:       1 * time.Minute,         // Reset failure count after 1min of success
+	}
+}
+
+// GetStandardTestTool returns a standardized tool definition using centralized schemas
+// This ensures consistent tool definitions across all tests and reduces duplication
+func GetStandardTestTool(toolName string) types.Tool {
+	// Use centralized fallback schema for consistency
+	tool := types.GetFallbackToolSchema(toolName)
+	if tool == nil {
+		panic("Unknown tool requested in test: " + toolName + ". Use types.GetFallbackToolSchema to check available tools.")
+	}
+	return *tool
+}
+
+// GetStandardTestTools returns commonly used test tools with consistent schemas
+func GetStandardTestTools() []types.Tool {
+	return []types.Tool{
+		GetStandardTestTool("Read"),
+		GetStandardTestTool("Write"),
+		GetStandardTestTool("Edit"),
+		GetStandardTestTool("Bash"),
+		GetStandardTestTool("Grep"),
+		GetStandardTestTool("LS"),
+		GetStandardTestTool("Glob"),
+		GetStandardTestTool("Task"),
+		GetStandardTestTool("TodoWrite"),
+		GetStandardTestTool("ExitPlanMode"),
 	}
 }
 

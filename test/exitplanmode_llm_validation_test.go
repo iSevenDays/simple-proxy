@@ -10,9 +10,9 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// TestExitPlanModeLLMValidation tests the LLM-based ExitPlanMode validation
+// TestExitPlanModeLLMValidationMocked tests the LLM-based ExitPlanMode validation with mocked endpoints
 // This should catch cases that pattern-based validation missed
-func TestExitPlanModeLLMValidation(t *testing.T) {
+func TestExitPlanModeLLMValidationMocked(t *testing.T) {
 	mockConfig := NewMockConfigProvider("http://mock-endpoint:8080/v1/chat/completions")
 	service := correction.NewService(mockConfig, "test-key", true, "test-model", false)
 	ctx := internal.WithRequestID(context.Background(), "llm-validation-test")

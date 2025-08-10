@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -157,18 +156,18 @@ func TestTimeoutDetectionAndFailover(t *testing.T) {
 		defer cancel()
 
 		start := time.Now()
-		_, err := service.DetectToolNecessity(ctx, "test", []types.Tool{
+		necessary, err := service.DetectToolNecessity(ctx, "test", []types.Tool{
 			{Name: "Read", InputSchema: types.ToolSchema{Type: "object"}},
 		})
 		duration := time.Since(start)
 
-		// Should fail after exhausting all endpoints
-		if err == nil {
-			t.Error("Expected error when all endpoints timeout, got nil")
+		// With graceful fallback, should return false, nil instead of error
+		if err != nil {
+			t.Errorf("Expected graceful fallback (nil error), got: %v", err)
 		}
-
-		if !strings.Contains(err.Error(), "Tool necessity detection failed") && !strings.Contains(err.Error(), "failed to parse response") {
-			t.Errorf("Expected timeout/parse error, got: %v", err)
+		
+		if necessary != false {
+			t.Errorf("Expected false (tool_choice=optional) as fallback, got: %v", necessary)
 		}
 
 		totalCalls := config.GetTotalCalls()

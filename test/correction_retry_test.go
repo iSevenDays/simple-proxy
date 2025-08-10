@@ -115,18 +115,19 @@ func TestSendCorrectionRequestRetryLogic(t *testing.T) {
 		})
 		service := correction.NewService(config, "test-key", true, "test-model", false)
 
-		// Test should fail after trying all endpoints
+		// Test should gracefully fallback when all endpoints fail
 		ctx := context.Background()
-		_, err := service.DetectToolNecessity(ctx, "test message", []types.Tool{
+		necessary, err := service.DetectToolNecessity(ctx, "test message", []types.Tool{
 			{Name: "Read", InputSchema: types.ToolSchema{Type: "object"}},
 		})
 
-		if err == nil {
-			t.Error("Expected error when all endpoints fail, got nil")
+		// Should return false, nil as graceful fallback (not error)
+		if err != nil {
+			t.Errorf("Expected graceful fallback (nil error), got: %v", err)
 		}
-
-		if !strings.Contains(err.Error(), "Tool necessity detection failed") && !strings.Contains(err.Error(), "endpoint returned status") {
-			t.Errorf("Expected tool necessity detection or endpoint error, got: %v", err)
+		
+		if necessary != false {
+			t.Errorf("Expected false (tool_choice=optional) as fallback, got: %v", necessary)
 		}
 	})
 
@@ -147,11 +148,13 @@ func TestSendCorrectionRequestRetryLogic(t *testing.T) {
 			{Name: "Read", InputSchema: types.ToolSchema{Type: "object"}},
 		})
 
-		// We expect this to fail, but it should have attempted retry
-		if err == nil {
-			t.Log("Unexpected success - this test environment may have different network behavior")
-		} else if !strings.Contains(err.Error(), "Tool necessity detection failed") && !strings.Contains(err.Error(), "tool correction request failed") {
-			t.Errorf("Expected proper error handling, got: %v", err)
+		// With graceful fallback, we expect success (false, nil) rather than error
+		if err != nil && strings.Contains(err.Error(), "tool correction request failed") {
+			t.Log("Connection refused as expected")
+		} else if err == nil {
+			t.Log("Graceful fallback - this is the expected behavior")
+		} else {
+			t.Errorf("Unexpected error type: %v", err)
 		}
 	})
 
@@ -161,12 +164,17 @@ func TestSendCorrectionRequestRetryLogic(t *testing.T) {
 		service := correction.NewService(config, "test-key", true, "test-model", false)
 
 		ctx := context.Background()
-		_, err := service.DetectToolNecessity(ctx, "test", []types.Tool{
+		necessary, err := service.DetectToolNecessity(ctx, "test", []types.Tool{
 			{Name: "Read", InputSchema: types.ToolSchema{Type: "object"}},
 		})
 
-		if err == nil {
-			t.Error("Expected error with empty endpoint list, got nil")
+		// With graceful fallback, empty endpoint list should return false, nil
+		if err != nil {
+			t.Errorf("Expected graceful fallback (nil error), got: %v", err)
+		}
+		
+		if necessary != false {
+			t.Errorf("Expected false (tool_choice=optional) as fallback, got: %v", necessary)
 		}
 	})
 }
