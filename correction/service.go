@@ -47,13 +47,14 @@ type ConfigProvider interface {
 
 // Service handles tool call correction using configurable model
 type Service struct {
-	config        ConfigProvider
-	apiKey        string
-	enabled       bool
-	modelName     string // Configurable model for corrections
+	config         ConfigProvider
+	apiKey         string
+	enabled        bool
+	modelName      string // Configurable model for corrections
 	disableLogging bool   // Disable tool correction logging
-	validator     types.ToolValidator // Injected tool validator
-	registry      types.SchemaRegistry // Injected schema registry
+	validator      types.ToolValidator // Injected tool validator
+	registry       types.SchemaRegistry // Injected schema registry
+	classifier     *HybridClassifier // Two-stage hybrid classifier for tool necessity
 }
 
 // NewService creates a new tool correction service with default components
@@ -66,6 +67,7 @@ func NewService(config ConfigProvider, apiKey string, enabled bool, modelName st
 		disableLogging: disableLogging,
 		validator:      types.NewStandardToolValidator(), // Default validator for backward compatibility
 		registry:       types.NewStandardSchemaRegistry(), // Default registry for backward compatibility
+		classifier:     NewHybridClassifier(),            // Two-stage hybrid classifier
 	}
 }
 
@@ -79,6 +81,7 @@ func NewServiceWithValidator(config ConfigProvider, apiKey string, enabled bool,
 		disableLogging: disableLogging,
 		validator:      validator,
 		registry:       types.NewStandardSchemaRegistry(), // Default registry
+		classifier:     NewHybridClassifier(),            // Two-stage hybrid classifier
 	}
 }
 
@@ -92,6 +95,7 @@ func NewServiceWithComponents(config ConfigProvider, apiKey string, enabled bool
 		disableLogging: disableLogging,
 		validator:      validator,
 		registry:       registry,
+		classifier:     NewHybridClassifier(), // Two-stage hybrid classifier
 	}
 }
 
@@ -430,24 +434,43 @@ func (s *Service) CorrectToolCalls(ctx context.Context, toolCalls []types.Conten
 	return correctedCalls, nil
 }
 
-// DetectToolNecessity analyzes user message to determine if tools should be required
-func (s *Service) DetectToolNecessity(ctx context.Context, userMessage string, availableTools []types.Tool) (bool, error) {
+// DetectToolNecessity analyzes conversation context to determine if tools should be required
+func (s *Service) DetectToolNecessity(ctx context.Context, messages []types.OpenAIMessage, availableTools []types.Tool) (bool, error) {
 	if !s.enabled {
 		return false, nil
 	}
 	
 	requestID := getRequestID(ctx)
 	
-	// Build analysis prompt
-	prompt := s.buildToolNecessityPrompt(userMessage, availableTools)
+	// Stage A & B: Use hybrid classifier for deterministic analysis
+	decision := s.classifier.DetectToolNecessity(messages)
+	
+	if s.shouldLog() {
+		log.Printf("🎯[%s] Hybrid classifier decision: %v (confident: %v, reason: %s)", 
+			requestID, decision.RequireTools, decision.Confident, decision.Reason)
+	}
+	
+	// If classifier is confident, use its decision (Stage B complete)
+	if decision.Confident {
+		return decision.RequireTools, nil
+	}
+	
+	// Stage C: LLM fallback for ambiguous cases only
+	return s.llmFallbackAnalysis(ctx, messages, availableTools, requestID)
+}
+
+// llmFallbackAnalysis handles Stage C - LLM fallback for ambiguous cases
+func (s *Service) llmFallbackAnalysis(ctx context.Context, messages []types.OpenAIMessage, availableTools []types.Tool, requestID string) (bool, error) {
+	// Use simplified prompt since rules handle clear cases
+	prompt := s.buildSimplifiedToolNecessityPrompt(messages, availableTools)
 	
 	// Create request to correction model
 	req := types.OpenAIRequest{
 		Model: s.modelName,
 		Messages: []types.OpenAIMessage{
 			{
-				Role:    "system",
-				Content: "You are a tool necessity analyzer for Claude Code preventing ExitPlanMode misuse. Your job is to determine if a user request requires forced tool usage (tool_choice='required'). Research/analysis requests should return 'NO' to allow natural conversation flow and prevent inappropriate ExitPlanMode usage as an escape hatch. Implementation/creation requests should return 'YES' when tools are actually needed. Respond with ONLY 'YES' or 'NO'.",
+				Role:    "system", 
+				Content: "Analyze if this ambiguous request requires tools. Focus on user intent and context. Respond only 'YES' or 'NO'.",
 			},
 			{
 				Role:    "user",
@@ -462,7 +485,7 @@ func (s *Service) DetectToolNecessity(ctx context.Context, userMessage string, a
 	response, err := s.sendCorrectionRequest(req)
 	if err != nil {
 		if s.shouldLog() {
-			log.Printf("⚠️[%s] Tool necessity detection failed, defaulting to optional: %v", requestID, err)
+			log.Printf("⚠️[%s] LLM fallback failed, defaulting to optional: %v", requestID, err)
 		}
 		return false, nil // Fail safe: don't force tools if analysis fails
 	}
@@ -470,7 +493,7 @@ func (s *Service) DetectToolNecessity(ctx context.Context, userMessage string, a
 	// Parse response
 	if len(response.Choices) == 0 {
 		if s.shouldLog() {
-			log.Printf("⚠️[%s] No response from tool necessity detection, defaulting to optional", requestID)
+			log.Printf("⚠️[%s] No LLM fallback response, defaulting to optional", requestID)
 		}
 		return false, nil // Fail safe: don't force tools if no response
 	}
@@ -479,7 +502,7 @@ func (s *Service) DetectToolNecessity(ctx context.Context, userMessage string, a
 	shouldRequire := strings.HasPrefix(content, "YES")
 	
 	if s.shouldLog() {
-		log.Printf("🎯[%s] Tool necessity analysis: %s -> %v", requestID, strings.ToLower(content), shouldRequire)
+		log.Printf("🎯[%s] LLM fallback analysis: %s -> %v", requestID, strings.ToLower(content), shouldRequire)
 	}
 	
 	return shouldRequire, nil
@@ -556,56 +579,172 @@ func (s *Service) getRecentToolNames(messages []types.OpenAIMessage, limit int) 
 }
 
 // buildToolNecessityPrompt creates the prompt for tool necessity analysis
-func (s *Service) buildToolNecessityPrompt(userMessage string, availableTools []types.Tool) string {
+func (s *Service) buildToolNecessityPrompt(messages []types.OpenAIMessage, availableTools []types.Tool) string {
 	// Build available tools list
 	var toolNames []string
 	for _, tool := range availableTools {
 		toolNames = append(toolNames, tool.Name)
 	}
 	
-	return fmt.Sprintf(`Analyze this user request and determine if tools should be REQUIRED (tool_choice="required") to complete it:
+	// Build conversation context
+	var conversationContext strings.Builder
+	conversationContext.WriteString("RECENT CONVERSATION:\n")
+	for i, msg := range messages {
+		// Truncate very long messages for context
+		content := msg.Content
+		if len(content) > 200 {
+			content = content[:200] + "... [truncated]"
+		}
+		
+		// Show role and content
+		conversationContext.WriteString(fmt.Sprintf("%d. %s: %s\n", i+1, strings.ToUpper(msg.Role), content))
+		
+		// Show tool calls if present
+		if len(msg.ToolCalls) > 0 {
+			var toolCallNames []string
+			for _, tc := range msg.ToolCalls {
+				toolCallNames = append(toolCallNames, tc.Function.Name)
+			}
+			conversationContext.WriteString(fmt.Sprintf("   [Used tools: %s]\n", strings.Join(toolCallNames, ", ")))
+		}
+	}
+	
+	// Extract the most recent user message for emphasis
+	var lastUserMessage string
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "user" {
+			lastUserMessage = messages[i].Content
+			break
+		}
+	}
+	
+	return fmt.Sprintf(`You are analyzing whether a user request requires tools (YES) or can be handled conversationally (NO).
 
-USER REQUEST: "%s"
+%s
 
+CURRENT REQUEST: "%s"
 AVAILABLE TOOLS: %s
 
-CRITICAL DISTINCTION: 
-- YES = Tools must be used (force tool_choice="required")
-- NO = Tools are optional (allow natural conversation, model can choose)
+MANDATORY RULE - If request contains ANY of these words, answer YES immediately:
+UPDATE/UPDATING, CREATE/CREATING, EDIT/EDITING, WRITE/WRITING, MODIFY/MODIFYING, FIX/FIXING, CHANGE/CHANGING, MAKE/MAKING, BUILD/BUILDING, ADD/ADDING, IMPLEMENT/IMPLEMENTING, INSTALL/INSTALLING, SETUP, RUN/RUNNING, EXECUTE/EXECUTING, LAUNCH/LAUNCHING, START/STARTING, DELETE/DELETING, REMOVE/REMOVING
 
-Examples that REQUIRE tools (answer YES):
-- "create a new file with X content"
-- "edit file Y to add Z functionality" 
-- "run this specific command"
-- "implement feature X" (clear implementation task)
-- "install dependencies and configure"
-- "execute tests and show results"
+OVERRIDE RULE: The phrase "updating CLAUDE.md" MUST return YES regardless of context or politeness.
 
-Examples that should NOT force tools (answer NO):
-- "read file X and tell me what it does" (research → explanation)
-- "check the logs and explain what happened" (analysis → summary)
-- "look at the code and suggest improvements" (review → recommendations)  
-- "find all instances of X and tell me about the pattern" (search → analysis)
-- "examine the architecture and describe the design" (investigation → report)
-- "analyze the codebase structure" (research → understanding)
+CONTEXT-AWARE DECISION MATRIX:
 
-REASONING: Analysis/research requests should allow the model to:
-1. Use tools for investigation if needed
-2. Provide natural text responses/summaries without being forced to use more tools
-3. Avoid inappropriate ExitPlanMode usage as an "escape hatch"
+SCENARIO 1 - CONTINUATION AFTER RESEARCH (Main failing case):
+Pattern: Research tools used → High token output → User requests implementation
+Example conversation:
+  USER: "gather knowledge about project and update CLAUDE.md"
+  ASSISTANT: [Used Task tool - 23,000 tokens research output]
+  USER: "Please continue with updating CLAUDE.md based on the research"
+DECISION: YES (Research complete, now implementation needed)
 
-EXITPLANMODE CONTEXT:
-ExitPlanMode is a tool that creates implementation plans. When tool_choice="required", the model is FORCED to use available tools. For research/analysis requests, this often leads to inappropriate ExitPlanMode usage because:
-- The model needs to use SOME tool to satisfy the "required" constraint
-- ExitPlanMode becomes the "escape hatch" when no other tools fit
-- This results in implementation plans for simple research questions
-- Example: "read architecture.md" → forced to use ExitPlanMode → creates unnecessary implementation plan
+SCENARIO 2 - DIRECT FILE OPERATIONS:
+- "create file", "edit config", "update README", "run tests" → YES
+- "write to file", "modify code", "add function" → YES
+- Any action on files/code regardless of politeness → YES
 
-SOLUTION: Research requests should return NO to allow optional tool usage, letting the model naturally use Read tools for investigation and provide text responses without being forced into ExitPlanMode.
+SCENARIO 3 - COMPOUND REQUESTS:
+- "analyze X and create Y" → YES (contains implementation verb "create")
+- "research Z and implement W" → YES (contains implementation verb "implement")
+- "gather info and update file" → YES (contains implementation verb "update")
 
-KEY PRINCIPLE: If the request implies "do X and then tell me about it" or ends with analysis/explanation/summary, answer NO to allow natural conversation flow.
+SCENARIO 4 - PURE RESEARCH/ANALYSIS:
+- "read file X and tell me what it does" → NO
+- "explain the architecture" → NO
+- "what does this code do?" → NO
 
-Respond with ONLY "YES" or "NO".`, userMessage, strings.Join(toolNames, ", "))
+FEW-SHOT EXAMPLES:
+
+EXAMPLE 1 (Target fix):
+Context: "Task tool used, 23k tokens output, research complete"
+Request: "Please continue with updating CLAUDE.md based on the research"
+Contains: "updating" (implementation verb)
+Phase: Research done, implementation needed
+ANSWER: YES
+
+EXAMPLE 2 (Simple implementation):
+Context: None
+Request: "create a new config file"
+Contains: "create" (implementation verb)  
+ANSWER: YES
+
+EXAMPLE 3 (Pure research):
+Context: None
+Request: "read the architecture docs and explain the design"
+Contains: No implementation verbs, asks for explanation
+ANSWER: NO
+
+EXAMPLE 4 (Compound with implementation):
+Context: None
+Request: "analyze the auth system and implement OAuth"
+Contains: "implement" (implementation verb)
+ANSWER: YES
+
+DECISION ALGORITHM:
+1. Does request contain implementation verbs? → YES
+2. Does conversation show research complete + user wants action? → YES
+3. Is request purely informational/explanatory? → NO
+4. When uncertain about file operations → YES
+
+CRITICAL: File operations (update, create, edit, modify) ALWAYS require tools.
+Be decisive. Prioritize action verbs over polite language.
+
+Answer only: YES or NO`, conversationContext.String(), lastUserMessage, strings.Join(toolNames, ", "))
+}
+
+// buildSimplifiedToolNecessityPrompt creates a simplified prompt for LLM fallback
+// Used only for ambiguous cases that rules couldn't handle
+func (s *Service) buildSimplifiedToolNecessityPrompt(messages []types.OpenAIMessage, availableTools []types.Tool) string {
+	// Build available tools list
+	var toolNames []string
+	for _, tool := range availableTools {
+		toolNames = append(toolNames, tool.Name)
+	}
+	
+	// Get recent conversation context (last 3 messages)
+	var contextMessages []string
+	start := len(messages) - 3
+	if start < 0 {
+		start = 0
+	}
+	
+	for _, msg := range messages[start:] {
+		role := strings.ToUpper(msg.Role)
+		content := msg.Content
+		if len(content) > 150 { // Truncate long messages
+			content = content[:150] + "..."
+		}
+		contextMessages = append(contextMessages, fmt.Sprintf("%s: %s", role, content))
+	}
+	
+	// Extract current user request
+	var currentRequest string
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "user" {
+			currentRequest = messages[i].Content
+			break
+		}
+	}
+	
+	return fmt.Sprintf(`This is an ambiguous request that needs analysis.
+
+RECENT CONTEXT:
+%s
+
+CURRENT REQUEST: "%s"
+TOOLS: %s
+
+The request was not clearly classified by rules. Analyze if it requires tools:
+- Does it ask for file operations, code changes, or command execution?
+- Is it asking to create, modify, or run something?
+- Or is it asking for explanation, analysis, or information only?
+
+Answer: YES or NO`, 
+		strings.Join(contextMessages, "\n"), 
+		currentRequest, 
+		strings.Join(toolNames, ", "))
 }
 
 // findToolByName finds a tool by exact name match
