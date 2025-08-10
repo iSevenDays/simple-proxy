@@ -1015,9 +1015,9 @@ func (s *Service) sendCorrectionRequest(req types.OpenAIRequest) (*types.OpenAIR
 		httpReq.Header.Set("Content-Type", "application/json")
 		httpReq.Header.Set("Authorization", "Bearer "+s.apiKey)
 
-		// Use shorter timeout for faster failover (good for both prod and tests)
+		// Use longer timeout for Task agents that need extensive tool usage
 		client := &http.Client{
-			Timeout: 10 * time.Second, // Reduced from 30s to 10s for faster failover
+			Timeout: 60 * time.Second, // Increased to allow Task agents to complete thorough analysis
 		}
 		
 		resp, err := client.Do(httpReq)
