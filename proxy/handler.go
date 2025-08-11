@@ -137,35 +137,31 @@ func (h *Handler) HandleAnthropicRequest(w http.ResponseWriter, r *http.Request)
 
 	// Apply smart tool choice detection if enabled and tools are available
 	if h.config.ToolCorrectionEnabled && len(openaiReq.Tools) > 0 && h.correctionService != nil {
-		// Extract the last user message for analysis
-		var lastUserMessage string
-		for i := len(openaiReq.Messages) - 1; i >= 0; i-- {
-			if openaiReq.Messages[i].Role == "user" {
-				lastUserMessage = openaiReq.Messages[i].Content
-				break
-			}
+		// Extract last N messages for context-aware analysis (max 10 messages)
+		const maxContextMessages = 10
+		contextMessages := openaiReq.Messages
+		if len(contextMessages) > maxContextMessages {
+			contextMessages = contextMessages[len(contextMessages)-maxContextMessages:]
 		}
 		
-		if lastUserMessage != "" {
-			// Convert OpenAI tools back to Anthropic format for analysis
-			var analysisTools []types.Tool
-			for _, openaiTool := range openaiReq.Tools {
-				analysisTools = append(analysisTools, types.Tool{
-					Name:        openaiTool.Function.Name,
-					Description: openaiTool.Function.Description,
-					InputSchema: openaiTool.Function.Parameters,
-				})
-			}
-			
-			shouldRequireTools, err := h.correctionService.DetectToolNecessity(ctx, lastUserMessage, analysisTools)
-			if err != nil {
-				loggerInstance.Warn("Tool necessity detection failed: %v", err)
-			} else if shouldRequireTools {
-				openaiReq.ToolChoice = "required"
-				loggerInstance.Info("🎯 Tool choice set to 'required' based on request analysis")
-			} else {
-				loggerInstance.Info("🎯 Tool choice remains optional based on request analysis")
-			}
+		// Convert OpenAI tools back to Anthropic format for analysis
+		var analysisTools []types.Tool
+		for _, openaiTool := range openaiReq.Tools {
+			analysisTools = append(analysisTools, types.Tool{
+				Name:        openaiTool.Function.Name,
+				Description: openaiTool.Function.Description,
+				InputSchema: openaiTool.Function.Parameters,
+			})
+		}
+		
+		shouldRequireTools, err := h.correctionService.DetectToolNecessity(ctx, contextMessages, analysisTools)
+		if err != nil {
+			loggerInstance.Warn("Tool necessity detection failed: %v", err)
+		} else if shouldRequireTools {
+			openaiReq.ToolChoice = "required"
+			loggerInstance.Info("🎯 Tool choice set to 'required' based on conversation analysis")
+		} else {
+			loggerInstance.Info("🎯 Tool choice remains optional based on conversation analysis")
 		}
 	}
 

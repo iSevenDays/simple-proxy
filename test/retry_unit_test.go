@@ -76,7 +76,9 @@ func TestBasicRetryFunctionality(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		result, err := service.DetectToolNecessity(ctx, "explain something", []types.Tool{
+		result, err := service.DetectToolNecessity(ctx, []types.OpenAIMessage{
+			{Role: "user", Content: "explain something"},
+		}, []types.Tool{
 			{Name: "Read", InputSchema: types.ToolSchema{Type: "object"}},
 		})
 
@@ -124,7 +126,9 @@ func TestBasicRetryFunctionality(t *testing.T) {
 		defer cancel()
 
 		start := time.Now()
-		result, err := service.DetectToolNecessity(ctx, "run command", []types.Tool{
+		result, err := service.DetectToolNecessity(ctx, []types.OpenAIMessage{
+			{Role: "user", Content: "run command"},
+		}, []types.Tool{
 			{Name: "Bash", InputSchema: types.ToolSchema{Type: "object"}},
 		})
 		duration := time.Since(start)
@@ -169,7 +173,9 @@ func TestBasicRetryFunctionality(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 
-		_, err := service.DetectToolNecessity(ctx, "test", []types.Tool{
+		_, err := service.DetectToolNecessity(ctx, []types.OpenAIMessage{
+			{Role: "user", Content: "test"},
+		}, []types.Tool{
 			{Name: "Read", InputSchema: types.ToolSchema{Type: "object"}},
 		})
 

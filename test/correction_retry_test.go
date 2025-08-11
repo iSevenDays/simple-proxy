@@ -85,7 +85,9 @@ func TestSendCorrectionRequestRetryLogic(t *testing.T) {
 
 		// Call private method through reflection or make it public for testing
 		// For now, let's test through DetectToolNecessity which uses sendCorrectionRequest
-		_, err := service.DetectToolNecessity(ctx, "read file test.txt", []types.Tool{
+		_, err := service.DetectToolNecessity(ctx, []types.OpenAIMessage{
+			{Role: "user", Content: "read file test.txt"},
+		}, []types.Tool{
 			{Name: "Read", InputSchema: types.ToolSchema{Type: "object"}},
 		})
 
@@ -117,7 +119,9 @@ func TestSendCorrectionRequestRetryLogic(t *testing.T) {
 
 		// Test should gracefully fallback when all endpoints fail
 		ctx := context.Background()
-		necessary, err := service.DetectToolNecessity(ctx, "test message", []types.Tool{
+		necessary, err := service.DetectToolNecessity(ctx, []types.OpenAIMessage{
+			{Role: "user", Content: "test message"},
+		}, []types.Tool{
 			{Name: "Read", InputSchema: types.ToolSchema{Type: "object"}},
 		})
 
@@ -144,7 +148,9 @@ func TestSendCorrectionRequestRetryLogic(t *testing.T) {
 		defer cancel()
 
 		// This should attempt retry on connection refused
-		_, err := service.DetectToolNecessity(ctx, "test", []types.Tool{
+		_, err := service.DetectToolNecessity(ctx, []types.OpenAIMessage{
+			{Role: "user", Content: "test"},
+		}, []types.Tool{
 			{Name: "Read", InputSchema: types.ToolSchema{Type: "object"}},
 		})
 
@@ -164,7 +170,9 @@ func TestSendCorrectionRequestRetryLogic(t *testing.T) {
 		service := correction.NewService(config, "test-key", true, "test-model", false)
 
 		ctx := context.Background()
-		necessary, err := service.DetectToolNecessity(ctx, "test", []types.Tool{
+		necessary, err := service.DetectToolNecessity(ctx, []types.OpenAIMessage{
+			{Role: "user", Content: "test"},
+		}, []types.Tool{
 			{Name: "Read", InputSchema: types.ToolSchema{Type: "object"}},
 		})
 
@@ -286,7 +294,9 @@ func TestRetryLogging(t *testing.T) {
 		defer cancel()
 
 		// This should log retry attempts
-		_, err := service.DetectToolNecessity(ctx, "test", []types.Tool{
+		_, err := service.DetectToolNecessity(ctx, []types.OpenAIMessage{
+			{Role: "user", Content: "test"},
+		}, []types.Tool{
 			{Name: "Read", InputSchema: types.ToolSchema{Type: "object"}},
 		})
 

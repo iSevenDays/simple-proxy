@@ -20,6 +20,9 @@ type RuleEngine struct {
 // NewRuleEngine creates a new rule engine with default rules
 func NewRuleEngine() *RuleEngine {
 	rules := []Rule{
+		// Highest priority: Contextual negation (explanation/hypothetical requests)
+		&ContextualNegationRule{},
+		
 		// High priority: Clear implementation patterns
 		&StrongVerbWithFileRule{},
 		&ImplementationVerbWithFileRule{},
@@ -348,6 +351,27 @@ func (r *PureResearchRule) IsSatisfiedBy(pairs []ActionPair, messages []types.Op
 			RequireTools: false,
 			Confident:    true,
 			Reason:       "Only research/analysis verbs detected, no implementation",
+		}
+	}
+	
+	return false, RuleDecision{}
+}
+
+// ContextualNegationRule: Highest priority rule for explanation/hypothetical requests = NO (confident)
+type ContextualNegationRule struct{}
+
+func (r *ContextualNegationRule) Priority() int { return 110 }
+func (r *ContextualNegationRule) Name() string { return "ContextualNegation" }
+
+func (r *ContextualNegationRule) IsSatisfiedBy(pairs []ActionPair, messages []types.OpenAIMessage) (bool, RuleDecision) {
+	// Check for our special contextual negation marker
+	for _, pair := range pairs {
+		if pair.Verb == "explanation_only" && pair.Artifact == "contextual_negation" {
+			return true, RuleDecision{
+				RequireTools: false,
+				Confident:    true,
+				Reason:       "Explanation/hypothetical request detected (contextual negation)",
+			}
 		}
 	}
 	

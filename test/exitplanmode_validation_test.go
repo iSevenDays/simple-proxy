@@ -772,7 +772,9 @@ func TestDetectToolNecessityIssue(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := service.DetectToolNecessity(ctx, tt.userMessage, tt.availableTools)
+			result, err := service.DetectToolNecessity(ctx, []types.OpenAIMessage{
+				{Role: "user", Content: tt.userMessage},
+			}, tt.availableTools)
 			
 			assert.NoError(t, err,
 				"Test case %s: Analysis should not error", tt.name)
@@ -856,7 +858,9 @@ func TestClaudeCodeUIAnalysisScenario(t *testing.T) {
 	for _, tt := range claudeUITests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Act: Detect tool necessity using real LLM
-			result, err := service.DetectToolNecessity(ctx, tt.userMessage, availableTools)
+			result, err := service.DetectToolNecessity(ctx, []types.OpenAIMessage{
+				{Role: "user", Content: tt.userMessage},
+			}, availableTools)
 			
 			// Assert: No errors and correct classification
 			assert.NoError(t, err, "Tool necessity detection should not error for Claude UI scenario: %s", tt.userMessage)

@@ -100,7 +100,9 @@ func TestTimeoutDetectionAndFailover(t *testing.T) {
 		defer cancel()
 
 		start := time.Now()
-		result, err := service.DetectToolNecessity(ctx, "test message", []types.Tool{
+		result, err := service.DetectToolNecessity(ctx, []types.OpenAIMessage{
+			{Role: "user", Content: "test message"},
+		}, []types.Tool{
 			{Name: "Read", InputSchema: types.ToolSchema{Type: "object"}},
 		})
 		duration := time.Since(start)
@@ -156,7 +158,9 @@ func TestTimeoutDetectionAndFailover(t *testing.T) {
 		defer cancel()
 
 		start := time.Now()
-		necessary, err := service.DetectToolNecessity(ctx, "test", []types.Tool{
+		necessary, err := service.DetectToolNecessity(ctx, []types.OpenAIMessage{
+			{Role: "user", Content: "test"},
+		}, []types.Tool{
 			{Name: "Read", InputSchema: types.ToolSchema{Type: "object"}},
 		})
 		duration := time.Since(start)
@@ -203,7 +207,9 @@ func TestTimeoutDetectionAndFailover(t *testing.T) {
 		defer cancel()
 
 		start := time.Now()
-		result, err := service.DetectToolNecessity(ctx, "test", []types.Tool{
+		result, err := service.DetectToolNecessity(ctx, []types.OpenAIMessage{
+			{Role: "user", Content: "test"},
+		}, []types.Tool{
 			{Name: "Read", InputSchema: types.ToolSchema{Type: "object"}},
 		})
 		duration := time.Since(start)
@@ -266,7 +272,9 @@ func TestDetectToolNecessityFailover(t *testing.T) {
 		defer cancel()
 
 		start := time.Now()
-		needsTools, err := service.DetectToolNecessity(ctx, "instead of single ip, I want to specify list of IPs", []types.Tool{
+		needsTools, err := service.DetectToolNecessity(ctx, []types.OpenAIMessage{
+			{Role: "user", Content: "instead of single ip, I want to specify list of IPs"},
+		}, []types.Tool{
 			{Name: "Task", InputSchema: types.ToolSchema{Type: "object"}},
 			{Name: "Read", InputSchema: types.ToolSchema{Type: "object"}},
 		})

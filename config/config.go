@@ -16,7 +16,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-
 // Config represents the proxy configuration - all settings from .env
 type Config struct {
 	Port string `json:"port"`
@@ -44,6 +43,8 @@ type Config struct {
 	ConversationLoggingEnabled bool   `json:"conversation_logging_enabled"` // Enable full conversation logging
 	ConversationLogLevel       string `json:"conversation_log_level"`       // Log level for conversation logs (DEBUG, INFO, WARN, ERROR)
 	ConversationMaskSensitive  bool   `json:"conversation_mask_sensitive"`  // Mask sensitive data in conversation logs
+	ConversationLogFullTools   bool   `json:"conversation_log_full_tools"`  // Log full tool definitions vs tool names only
+	ConversationTruncation     int    `json:"conversation_truncation"`      // Maximum message length (0 = disabled)
 
 	// System message overrides (loaded from system_overrides.yaml)
 	SystemMessageOverrides SystemMessageOverrides `json:"system_message_overrides"`
@@ -111,16 +112,18 @@ func LoadConfigWithEnv() (*Config, error) {
 
 	// Create new config with defaults
 	cfg := &Config{
-		Port:                       "3456",                  // Default port
-		ToolCorrectionEnabled:      true,                    // Enable by default
-		HandleEmptyToolResults:     true,                    // Enable by default for API compliance
-		SkipTools:                  []string{},              // Empty by default
-		ToolDescriptions:           make(map[string]string), // Empty by default
-		PrintSystemMessage:         false,                   // Disabled by default
-		PrintToolSchemas:           false,                   // Disabled by default
-		ConversationLoggingEnabled: false,                   // Disabled by default
-		ConversationLogLevel:       "INFO",                  // Default to INFO level
-		ConversationMaskSensitive:  true,                    // Enable sensitive data masking by default
+		Port:                       "3456",                   // Default port
+		ToolCorrectionEnabled:      true,                     // Enable by default
+		HandleEmptyToolResults:     true,                     // Enable by default for API compliance
+		SkipTools:                  []string{},               // Empty by default
+		ToolDescriptions:           make(map[string]string),  // Empty by default
+		PrintSystemMessage:         false,                    // Disabled by default
+		PrintToolSchemas:           false,                    // Disabled by default
+		ConversationLoggingEnabled: false,                    // Disabled by default
+		ConversationLogLevel:       "INFO",                   // Default to INFO level
+		ConversationMaskSensitive:  true,                     // Enable sensitive data masking by default
+		ConversationLogFullTools:   false,                    // Log tool names only by default
+		ConversationTruncation:     0,                        // No truncation by default
 		SystemMessageOverrides:     SystemMessageOverrides{}, // Empty by default
 		HealthManager:              circuitbreaker.NewHealthManager(circuitbreaker.DefaultConfig()),
 	}
@@ -341,6 +344,42 @@ func LoadConfigWithEnv() (*Config, error) {
 			cfg.ConversationMaskSensitive = true
 			log.Printf("🔒 Configured CONVERSATION_MASK_SENSITIVE: enabled")
 		}
+	}
+
+	// Parse LOG_FULL_TOOLS (required)
+	if logFullTools, exists := envVars["LOG_FULL_TOOLS"]; exists {
+		if logFullTools == "true" || logFullTools == "1" {
+			cfg.ConversationLogFullTools = true
+			log.Printf("🔧 Configured LOG_FULL_TOOLS: enabled (full tool definitions)")
+		} else if logFullTools == "false" || logFullTools == "0" {
+			cfg.ConversationLogFullTools = false
+			log.Printf("🔧 Configured LOG_FULL_TOOLS: disabled (tool names only)")
+		} else {
+			return nil, fmt.Errorf("LOG_FULL_TOOLS must be 'true' or 'false', got: %s", logFullTools)
+		}
+	} else {
+		return nil, fmt.Errorf("LOG_FULL_TOOLS must be set in .env file")
+	}
+
+	// Parse CONVERSATION_TRUNCATION (required)
+	if truncation, exists := envVars["CONVERSATION_TRUNCATION"]; exists {
+		if truncation == "false" || truncation == "0" {
+			cfg.ConversationTruncation = 0
+			log.Printf("✂️  Configured CONVERSATION_TRUNCATION: disabled")
+		} else {
+			// Try to parse as integer
+			var truncationValue int
+			if n, err := fmt.Sscanf(truncation, "%d", &truncationValue); n != 1 || err != nil {
+				return nil, fmt.Errorf("CONVERSATION_TRUNCATION must be 'false' or a positive number, got: %s", truncation)
+			}
+			if truncationValue < 0 {
+				return nil, fmt.Errorf("CONVERSATION_TRUNCATION must be a positive number, got: %d", truncationValue)
+			}
+			cfg.ConversationTruncation = truncationValue
+			log.Printf("✂️  Configured CONVERSATION_TRUNCATION: enabled (%d characters)", truncationValue)
+		}
+	} else {
+		return nil, fmt.Errorf("CONVERSATION_TRUNCATION must be set in .env file")
 	}
 
 	// Load tool description overrides from YAML file
@@ -585,7 +624,7 @@ func ApplySystemMessageOverrides(originalMessage string, overrides SystemMessage
 	}
 
 	// Print updated system prompt
-	log.Printf("Modified system prompt:\n%s", message)
+	//log.Printf("Modified system prompt:\n%s", message)
 
 	return message
 }
@@ -634,7 +673,6 @@ func (c *Config) GetToolCorrectionEndpoint() string {
 
 	return c.HealthManager.SelectHealthyEndpoint(c.ToolCorrectionEndpoints, &c.toolCorrectionIndex)
 }
-
 
 // IsEndpointHealthy checks if an endpoint is available (circuit closed)
 func (c *Config) IsEndpointHealthy(endpoint string) bool {

@@ -94,51 +94,120 @@ func (h *HybridClassifier) DetectToolNecessity(messages []types.OpenAIMessage) R
 func (h *HybridClassifier) extractActionPairs(messages []types.OpenAIMessage) []ActionPair {
 	var pairs []ActionPair
 
-	// Analyze recent messages (focus on last few turns)
+	// Find the most recent user message - this is the primary intent
+	var mostRecentUserMsg *types.OpenAIMessage
+	var mostRecentUserIdx int
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "user" {
+			mostRecentUserMsg = &messages[i]
+			mostRecentUserIdx = i
+			break
+		}
+	}
+
+	if mostRecentUserMsg == nil {
+		return pairs // No user messages found
+	}
+
+	// PHASE 1: Analyze the most recent user message (primary intent)
+	content := strings.ToLower(mostRecentUserMsg.Content)
+	words := strings.Fields(content)
+	
+	// CONTEXTUAL NEGATION DETECTION - Check for patterns that negate implementation intent
+	if h.detectContextualNegation(content) {
+		// Add a special marker to indicate this is explanation/hypothetical only
+		pairs = append(pairs, ActionPair{
+			Verb:      "explanation_only",
+			Artifact:  "contextual_negation",
+			Confident: true,
+		})
+		return pairs
+	}
+
+	for i, word := range words {
+		cleanWord := strings.Trim(word, ".,!?:;\"'()[]")
+
+		// Check if this is an implementation verb in the current request
+		if h.implVerbs[cleanWord] {
+			artifact := h.findNearbyArtifact(words, i, mostRecentUserMsg.Content)
+			confident := artifact != "" || h.strongVerbs[cleanWord]
+
+			pairs = append(pairs, ActionPair{
+				Verb:      cleanWord,
+				Artifact:  artifact,
+				Confident: confident,
+			})
+		}
+
+		// Check if this is a research verb
+		if h.researchVerbs[cleanWord] && !h.implVerbs[cleanWord] {
+			pairs = append(pairs, ActionPair{
+				Verb:      cleanWord,
+				Artifact:  "",
+				Confident: true,
+			})
+		}
+	}
+
+	// PHASE 2: Check previous user messages for compound request context
+	// Only if we don't have strong implementation verbs in the current message
+	hasStrongCurrentImplementation := false
+	for _, pair := range pairs {
+		if h.strongVerbs[pair.Verb] && pair.Artifact != "" {
+			hasStrongCurrentImplementation = true
+			break
+		}
+	}
+
+	// If current message doesn't have strong implementation signals, check if this might be 
+	// a compound request continuation that needs historical context
+	if !hasStrongCurrentImplementation {
+		// First, check if implementation has been completed recently
+		implementationCompleted := h.detectRecentImplementationCompletion(messages, mostRecentUserIdx)
+		
+		// Only check historical context if implementation hasn't been completed
+		if !implementationCompleted {
+			// Look back through previous user messages for compound request context
+			for i := mostRecentUserIdx - 1; i >= 0; i-- {
+				if messages[i].Role == "user" {
+					historicalContent := strings.ToLower(messages[i].Content)
+					historicalWords := strings.Fields(historicalContent)
+
+					for j, word := range historicalWords {
+						cleanWord := strings.Trim(word, ".,!?:;\"'()[]")
+
+						// Only add historical implementation verbs with lower priority
+						if h.implVerbs[cleanWord] {
+							artifact := h.findNearbyArtifact(historicalWords, j, messages[i].Content)
+							confident := artifact != "" || h.strongVerbs[cleanWord]
+
+							// Mark as historical context (less confident)
+							pairs = append(pairs, ActionPair{
+								Verb:      cleanWord,
+								Artifact:  artifact,
+								Confident: confident && len(pairs) == 0, // Only confident if no current pairs
+							})
+						}
+					}
+					
+					// Only look at the previous user message for compound context
+					break
+				}
+			}
+		}
+	}
+
+	// PHASE 3: Analyze recent assistant messages for research context
 	startIdx := 0
-	if len(messages) > 6 { // Look at last 6 messages for context
+	if len(messages) > 6 {
 		startIdx = len(messages) - 6
 	}
 
 	for _, msg := range messages[startIdx:] {
-		if msg.Role == "user" || msg.Role == "assistant" {
-			content := strings.ToLower(msg.Content)
-			words := strings.Fields(content)
-
-			// Look for verb-artifact patterns
-			for i, word := range words {
-				cleanWord := strings.Trim(word, ".,!?:;\"'()[]")
-
-				// Check if this is an implementation verb
-				if h.implVerbs[cleanWord] {
-					// Look for artifacts in nearby words
-					artifact := h.findNearbyArtifact(words, i, msg.Content)
-					confident := artifact != "" || h.strongVerbs[cleanWord]
-
-					pairs = append(pairs, ActionPair{
-						Verb:      cleanWord,
-						Artifact:  artifact,
-						Confident: confident,
-					})
-				}
-
-				// Check if this is a research verb (for contrast)
-				if h.researchVerbs[cleanWord] && !h.implVerbs[cleanWord] {
-					pairs = append(pairs, ActionPair{
-						Verb:      cleanWord,
-						Artifact:  "",
-						Confident: true,
-					})
-				}
-			}
-		}
-
-		// Also check if assistant used research tools (indicates research phase done)
 		if msg.Role == "assistant" && len(msg.ToolCalls) > 0 {
 			for _, toolCall := range msg.ToolCalls {
 				toolName := strings.ToLower(toolCall.Function.Name)
 				if toolName == "task" || toolName == "read" || toolName == "grep" || toolName == "glob" {
-					// Previous research tools used - context indicator
 					pairs = append(pairs, ActionPair{
 						Verb:      "research_done",
 						Artifact:  toolName,
@@ -150,6 +219,64 @@ func (h *HybridClassifier) extractActionPairs(messages []types.OpenAIMessage) []
 	}
 
 	return pairs
+}
+
+// detectRecentImplementationCompletion checks if implementation work was recently completed
+// by looking for assistant messages indicating completion after tool usage
+func (h *HybridClassifier) detectRecentImplementationCompletion(messages []types.OpenAIMessage, mostRecentUserIdx int) bool {
+	// Look at messages between the most recent user message and the previous user message
+	if mostRecentUserIdx < 1 {
+		return false // No previous context
+	}
+	
+	// Find the previous user message
+	prevUserIdx := -1
+	for i := mostRecentUserIdx - 1; i >= 0; i-- {
+		if messages[i].Role == "user" {
+			prevUserIdx = i
+			break
+		}
+	}
+	
+	if prevUserIdx == -1 {
+		return false // No previous user message
+	}
+	
+	// Check assistant messages between previous user message and current user message
+	// for completion indicators
+	for i := prevUserIdx + 1; i < mostRecentUserIdx; i++ {
+		if messages[i].Role == "assistant" {
+			content := strings.ToLower(messages[i].Content)
+			
+			// Look for completion indicators
+			completionPhrases := []string{
+				"updated", "completed", "finished", "successfully", 
+				"created", "implemented", "generated", "added",
+				"comprehensive", "analysis", "based on",
+				"the file now contains", "detailed information",
+			}
+			
+			completionCount := 0
+			for _, phrase := range completionPhrases {
+				if strings.Contains(content, phrase) {
+					completionCount++
+				}
+			}
+			
+			// If we see multiple completion indicators in a single message,
+			// and there were tool calls in this conversation, it's likely completion
+			if completionCount >= 3 {
+				// Also check that there were actual tool calls in this sequence
+				for j := prevUserIdx + 1; j < mostRecentUserIdx; j++ {
+					if messages[j].Role == "assistant" && len(messages[j].ToolCalls) > 0 {
+						return true // Implementation was completed
+					}
+				}
+			}
+		}
+	}
+	
+	return false
 }
 
 // AddCustomRule allows adding custom rules to the classifier
@@ -197,6 +324,110 @@ func (h *HybridClassifier) findNearbyArtifact(words []string, verbIndex int, ori
 	}
 
 	return ""
+}
+
+// detectContextualNegation identifies patterns that negate implementation intent
+// Returns true if the request is for explanation/hypothetical scenarios rather than implementation
+func (h *HybridClassifier) detectContextualNegation(content string) bool {
+	// Patterns that indicate explanation/teaching rather than implementation
+	teachingPatterns := []string{
+		"show me how to",
+		"explain how to",
+		"tell me how to",
+		"demonstrate how to",
+		"walk me through",
+		"guide me through",
+		"how do i",
+		"how should i",
+		"how can i",
+		"what's the best way to",
+		"what is the best way to",
+	}
+	
+	// Patterns that indicate hypothetical scenarios
+	hypotheticalPatterns := []string{
+		"what would happen if",
+		"what if i",
+		"what if we",
+		"suppose i",
+		"suppose we",
+		"imagine if",
+		"if i were to",
+		"if we were to",
+		"hypothetically",
+		"theoretically",
+	}
+	
+	// Patterns that indicate analysis without action
+	analysisPatterns := []string{
+		"without fixing",
+		"without implementing",
+		"without creating",
+		"without updating",
+		"without changing",
+		"without modifying",
+		"analyze what",
+		"explain what",
+		"describe what",
+		"tell me what",
+		"show me what",
+		"without actually",
+		"but don't",
+		"don't actually",
+		"just analyze",
+		"only analyze",
+		"just explain",
+		"only explain",
+	}
+	
+	// Patterns that indicate meta-conversations about tools (not using tools)
+	metaToolPatterns := []string{
+		"how does the",
+		"how do you use",
+		"what does the",
+		"explain the",
+		"describe the",
+		"tell me about the",
+		"what parameters",
+		"what options",
+		"how to use",
+		"tool work",
+		"tool do",
+		"command work",
+		"command do",
+		"function work",
+		"function do",
+	}
+	
+	// Check for teaching patterns
+	for _, pattern := range teachingPatterns {
+		if strings.Contains(content, pattern) {
+			return true
+		}
+	}
+	
+	// Check for hypothetical patterns
+	for _, pattern := range hypotheticalPatterns {
+		if strings.Contains(content, pattern) {
+			return true
+		}
+	}
+	
+	// Check for analysis-only patterns
+	for _, pattern := range analysisPatterns {
+		if strings.Contains(content, pattern) {
+			return true
+		}
+	}
+	
+	// Check for meta-tool conversation patterns
+	for _, pattern := range metaToolPatterns {
+		if strings.Contains(content, pattern) {
+			return true
+		}
+	}
+	
+	return false
 }
 
 // looksLikeFile checks if an artifact appears to be a file (uses the helper function from rules.go)

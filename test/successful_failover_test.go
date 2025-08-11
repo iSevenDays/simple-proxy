@@ -84,7 +84,9 @@ func TestSuccessfulFailoverScenarios(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		result, err := service.DetectToolNecessity(ctx, "read a file", []types.Tool{
+		result, err := service.DetectToolNecessity(ctx, []types.OpenAIMessage{
+			{Role: "user", Content: "read a file"},
+		}, []types.Tool{
 			{Name: "Read", InputSchema: types.ToolSchema{Type: "object"}},
 		})
 
@@ -250,7 +252,9 @@ func TestSuccessfulFailoverScenarios(t *testing.T) {
 		defer cancel()
 
 		start := time.Now()
-		result, err := service.DetectToolNecessity(ctx, "explain concept", []types.Tool{
+		result, err := service.DetectToolNecessity(ctx, []types.OpenAIMessage{
+			{Role: "user", Content: "explain concept"},
+		}, []types.Tool{
 			{Name: "Read", InputSchema: types.ToolSchema{Type: "object"}},
 		})
 		duration := time.Since(start)
@@ -296,7 +300,9 @@ func TestSuccessfulFailoverScenarios(t *testing.T) {
 		defer cancel()
 
 		start := time.Now()
-		result, err := service.DetectToolNecessity(ctx, "run tests", []types.Tool{
+		result, err := service.DetectToolNecessity(ctx, []types.OpenAIMessage{
+			{Role: "user", Content: "run tests"},
+		}, []types.Tool{
 			{Name: "Bash", InputSchema: types.ToolSchema{Type: "object"}},
 		})
 		duration := time.Since(start)
@@ -350,7 +356,9 @@ func TestFailoverLogMessages(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		_, err := service.DetectToolNecessity(ctx, "test", []types.Tool{
+		_, err := service.DetectToolNecessity(ctx, []types.OpenAIMessage{
+			{Role: "user", Content: "test"},
+		}, []types.Tool{
 			{Name: "Read", InputSchema: types.ToolSchema{Type: "object"}},
 		})
 
@@ -393,7 +401,9 @@ func TestEdgeCasesInFailover(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		_, err := service.DetectToolNecessity(ctx, "test empty response", []types.Tool{
+		_, err := service.DetectToolNecessity(ctx, []types.OpenAIMessage{
+			{Role: "user", Content: "test empty response"},
+		}, []types.Tool{
 			{Name: "Read", InputSchema: types.ToolSchema{Type: "object"}},
 		})
 
@@ -429,7 +439,9 @@ func TestEdgeCasesInFailover(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		_, err := service.DetectToolNecessity(ctx, "test invalid JSON", []types.Tool{
+		_, err := service.DetectToolNecessity(ctx, []types.OpenAIMessage{
+			{Role: "user", Content: "test invalid JSON"},
+		}, []types.Tool{
 			{Name: "Read", InputSchema: types.ToolSchema{Type: "object"}},
 		})
 

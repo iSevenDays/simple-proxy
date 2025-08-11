@@ -475,7 +475,9 @@ func TestSmartToolChoice(t *testing.T) {
 			// For unit testing, we would need to mock the HTTP response.
 			// For now, we test the prompt generation logic.
 			
-			prompt := buildToolNecessityPromptPublic(service, tt.userMessage, availableTools)
+			prompt := buildToolNecessityPromptPublic(service, []types.OpenAIMessage{
+				{Role: "user", Content: tt.userMessage},
+			}, availableTools)
 			
 			// Verify prompt contains essential elements
 			assert.Contains(t, prompt, tt.userMessage, "Prompt should contain user message")
@@ -493,11 +495,20 @@ func TestSmartToolChoice(t *testing.T) {
 }
 
 // Helper function to test prompt generation without HTTP calls
-func buildToolNecessityPromptPublic(service *correction.Service, userMessage string, tools []types.Tool) string {
+func buildToolNecessityPromptPublic(service *correction.Service, messages []types.OpenAIMessage, tools []types.Tool) string {
 	// Simplified version that matches expected test assertions
 	var toolNames []string
 	for _, tool := range tools {
 		toolNames = append(toolNames, tool.Name)
+	}
+	
+	// Extract user message from conversation
+	var userMessage string
+	for _, msg := range messages {
+		if msg.Role == "user" {
+			userMessage = msg.Content
+			break
+		}
 	}
 	
 	return fmt.Sprintf(`Analyze this user request and determine if it requires using tools to complete:

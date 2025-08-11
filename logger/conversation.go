@@ -13,12 +13,14 @@ import (
 
 // ConversationLogger handles full conversation logging to files
 type ConversationLogger struct {
-	sessionID    string
-	logFile      *os.File
-	mu           sync.Mutex
-	enabled      bool
-	logLevel     Level
+	sessionID     string
+	logFile       *os.File
+	mu            sync.Mutex
+	enabled       bool
+	logLevel      Level
 	maskSensitive bool
+	logFullTools  bool
+	truncation    int
 }
 
 // ConversationConfig holds configuration for conversation logging
@@ -26,6 +28,8 @@ type ConversationConfig struct {
 	Enabled       bool
 	LogLevel      Level
 	MaskSensitive bool
+	LogFullTools  bool
+	Truncation    int
 	LogDir        string
 }
 
@@ -34,7 +38,7 @@ var conversationLoggerInstance *ConversationLogger
 var conversationLoggerOnce sync.Once
 
 // NewConversationLogger creates a new conversation logger
-func NewConversationLogger(logDir string, logLevel Level, maskSensitive bool) (*ConversationLogger, error) {
+func NewConversationLogger(logDir string, logLevel Level, maskSensitive bool, logFullTools bool, truncation int) (*ConversationLogger, error) {
 	sessionID := generateSessionID()
 	timestamp := time.Now().Format("20060102-150405")
 	filename := fmt.Sprintf("conversation-%s-%s.log", sessionID, timestamp)
@@ -57,6 +61,8 @@ func NewConversationLogger(logDir string, logLevel Level, maskSensitive bool) (*
 		enabled:       true,
 		logLevel:      logLevel,
 		maskSensitive: maskSensitive,
+		logFullTools:  logFullTools,
+		truncation:    truncation,
 	}
 	
 	// Log session start
@@ -118,6 +124,8 @@ func InitConversationLogger(config ConversationConfig) error {
 			enabled:       true,
 			logLevel:      config.LogLevel,
 			maskSensitive: config.MaskSensitive,
+			logFullTools:  config.LogFullTools,
+			truncation:    config.Truncation,
 		}
 
 		// Log session start
@@ -182,6 +190,14 @@ func (cl *ConversationLogger) LogRequest(ctx context.Context, requestID string, 
 	requestData := request
 	if cl.maskSensitive {
 		requestData = cl.maskSensitiveData(request)
+	}
+	
+	// Process tool data based on LOG_FULL_TOOLS setting
+	requestData = cl.processToolData(requestData)
+	
+	// Apply truncation if enabled
+	if cl.truncation > 0 {
+		requestData = cl.truncateMessages(requestData)
 	}
 	
 	logEntry := map[string]interface{}{
@@ -292,7 +308,7 @@ func (cl *ConversationLogger) writeLogEntry(category string, data map[string]int
 		"data":     data,
 	}
 	
-	jsonData, err := json.Marshal(logLine)
+	jsonData, err := json.MarshalIndent(logLine, "", "  ")
 	if err != nil {
 		log.Printf("❌ Failed to marshal conversation log entry: %v", err)
 		return
@@ -361,6 +377,133 @@ func (cl *ConversationLogger) isSensitiveField(fieldName string) bool {
 	return false
 }
 
+// processToolData processes tool information based on LOG_FULL_TOOLS setting
+func (cl *ConversationLogger) processToolData(data interface{}) interface{} {
+	// If LOG_FULL_TOOLS is true, return data as-is
+	if cl.logFullTools {
+		return data
+	}
+	
+	// Convert to JSON and back to create a deep copy
+	jsonData, err := json.Marshal(data)
+	if err != nil {
+		return data
+	}
+	
+	var result interface{}
+	if err := json.Unmarshal(jsonData, &result); err != nil {
+		return data
+	}
+	
+	// Recursively process tools
+	cl.processToolsInData(result)
+	return result
+}
+
+// truncateMessages recursively truncates message content based on CONVERSATION_TRUNCATION setting
+func (cl *ConversationLogger) truncateMessages(data interface{}) interface{} {
+	// Convert to JSON and back to create a deep copy
+	jsonData, err := json.Marshal(data)
+	if err != nil {
+		return data
+	}
+	
+	var result interface{}
+	if err := json.Unmarshal(jsonData, &result); err != nil {
+		return data
+	}
+	
+	// Recursively process messages
+	cl.truncateMessagesInData(result)
+	return result
+}
+
+// truncateMessagesInData recursively finds and truncates message content
+func (cl *ConversationLogger) truncateMessagesInData(data interface{}) {
+	switch v := data.(type) {
+	case map[string]interface{}:
+		for key, value := range v {
+			if key == "content" {
+				// Handle content as string
+				if contentStr, ok := value.(string); ok {
+					v[key] = cl.truncateString(contentStr)
+				} else {
+					// Always recurse into content even if it's not a string (could be array)
+					cl.truncateMessagesInData(value)
+				}
+			} else if key == "text" {
+				// Handle text fields anywhere in the structure
+				if textStr, ok := value.(string); ok {
+					v[key] = cl.truncateString(textStr)
+				}
+			} else {
+				// Recurse into all other fields
+				cl.truncateMessagesInData(value)
+			}
+		}
+	case []interface{}:
+		for _, item := range v {
+			cl.truncateMessagesInData(item)
+		}
+	}
+}
+
+// truncateString truncates a string to the specified length, keeping beginning and end
+func (cl *ConversationLogger) truncateString(s string) string {
+	if cl.truncation <= 0 || len(s) <= cl.truncation {
+		return s
+	}
+	
+	// Handle very small truncation cases
+	if cl.truncation < 5 {
+		// Just return first few characters if we can't fit ellipsis
+		if cl.truncation <= len(s) {
+			return s[:cl.truncation]
+		}
+		return s
+	}
+	
+	// Calculate how much to keep from each end
+	halfLength := (cl.truncation - 5) / 2 // Reserve 5 chars for " ... "
+	if halfLength < 1 {
+		halfLength = 1
+	}
+	
+	beginning := s[:halfLength]
+	end := s[len(s)-halfLength:]
+	
+	return beginning + " ... " + end
+}
+
+// processToolsInData recursively processes tools array to show only tool names
+func (cl *ConversationLogger) processToolsInData(data interface{}) {
+	switch v := data.(type) {
+	case map[string]interface{}:
+		for key, value := range v {
+			if key == "tools" {
+				// Replace tools array with tool names only
+				if toolsArray, ok := value.([]interface{}); ok {
+					toolNames := make([]string, 0, len(toolsArray))
+					for _, tool := range toolsArray {
+						if toolMap, ok := tool.(map[string]interface{}); ok {
+							if name, ok := toolMap["name"].(string); ok {
+								toolNames = append(toolNames, name)
+							}
+						}
+					}
+					v[key] = toolNames
+				}
+			} else {
+				cl.processToolsInData(value)
+			}
+		}
+	case []interface{}:
+		for _, item := range v {
+			cl.processToolsInData(item)
+		}
+	}
+}
+
 // Close safely closes the conversation logger
 func (cl *ConversationLogger) Close() error {
 	if !cl.enabled || cl.logFile == nil {
@@ -382,7 +525,7 @@ func (cl *ConversationLogger) Close() error {
 		"data":     sessionInfo,
 	}
 	
-	if jsonData, err := json.Marshal(logLine); err == nil {
+	if jsonData, err := json.MarshalIndent(logLine, "", "  "); err == nil {
 		cl.logFile.Write(append(jsonData, '\n'))
 		cl.logFile.Sync()
 	}
