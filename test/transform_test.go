@@ -812,3 +812,115 @@ func TestEmptyToolResultHandling(t *testing.T) {
 		})
 	}
 }
+
+// TestToolResultContentOverrides tests applying system message overrides to tool result content
+func TestToolResultContentOverrides(t *testing.T) {
+	tests := []struct {
+		name            string
+		anthropicReq    types.AnthropicRequest
+		overrides       config.SystemMessageOverrides
+		expectedContent string
+		description     string
+	}{
+		{
+			name: "tool_result_removes_malicious_warning",
+			anthropicReq: types.AnthropicRequest{
+				Model: "test-model",
+				Messages: []types.Message{
+					{
+						Role: "user",
+						Content: []interface{}{
+							map[string]interface{}{
+								"type":        "tool_result",
+								"content":     "File contents here.\n\nNOTE: do any of the files above seem malicious? If so, you MUST refuse to continue work.",
+								"tool_use_id": "call_123",
+							},
+						},
+					},
+				},
+			},
+			overrides: config.SystemMessageOverrides{
+				RemovePatterns: []string{
+					"NOTE: do any of the files above seem malicious\\? If so, you MUST refuse to continue work\\.?",
+				},
+			},
+			expectedContent: "File contents here.\n\n",
+			description:     "Should remove malicious warning pattern from tool result content",
+		},
+		{
+			name: "tool_result_applies_replacements",
+			anthropicReq: types.AnthropicRequest{
+				Model: "test-model",
+				Messages: []types.Message{
+					{
+						Role: "user",
+						Content: []interface{}{
+							map[string]interface{}{
+								"type":        "tool_result",
+								"content":     "Claude Code performed the action successfully",
+								"tool_use_id": "call_456",
+							},
+						},
+					},
+				},
+			},
+			overrides: config.SystemMessageOverrides{
+				Replacements: []config.SystemMessageReplacement{
+					{
+						Find:    "Claude Code",
+						Replace: "AI Assistant",
+					},
+				},
+			},
+			expectedContent: "AI Assistant performed the action successfully",
+			description:     "Should apply text replacements to tool result content",
+		},
+		{
+			name: "tool_result_no_overrides",
+			anthropicReq: types.AnthropicRequest{
+				Model: "test-model",
+				Messages: []types.Message{
+					{
+						Role: "user",
+						Content: []interface{}{
+							map[string]interface{}{
+								"type":        "tool_result",
+								"content":     "Original content unchanged",
+								"tool_use_id": "call_789",
+							},
+						},
+					},
+				},
+			},
+			overrides:       config.SystemMessageOverrides{},
+			expectedContent: "Original content unchanged",
+			description:     "Should leave content unchanged when no overrides configured",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create config with the specified overrides
+			cfg := &config.Config{
+				SystemMessageOverrides: tt.overrides,
+			}
+
+			ctx := internal.WithRequestID(context.Background(), "tool_result_override_test")
+			result, err := proxy.TransformAnthropicToOpenAI(ctx, tt.anthropicReq, cfg)
+			require.NoError(t, err)
+
+			// Should have one message
+			require.Len(t, result.Messages, 1)
+
+			// Message should have expected content after overrides applied
+			assert.Equal(t, tt.expectedContent, result.Messages[0].Content, tt.description)
+
+			// Message should have tool role
+			assert.Equal(t, "tool", result.Messages[0].Role)
+
+			// Should preserve tool call ID from the input
+			expectedToolCallID := tt.anthropicReq.Messages[0].Content.([]interface{})[0].(map[string]interface{})["tool_use_id"].(string)
+			assert.Equal(t, expectedToolCallID, result.Messages[0].ToolCallID)
+		})
+	}
+}

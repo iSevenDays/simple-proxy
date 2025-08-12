@@ -267,13 +267,13 @@ func TestDetectToolNecessityFailover(t *testing.T) {
 		config := NewTimeoutTestConfig([]string{problemEndpoint.URL, fallbackEndpoint.URL})
 		service := correction.NewService(config, "test-key", true, "test-model", false)
 
-		// Test the exact user message pattern that was failing
+		// Test with an ambiguous user message that requires LLM analysis for failover behavior
 		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 		defer cancel()
 
 		start := time.Now()
 		needsTools, err := service.DetectToolNecessity(ctx, []types.OpenAIMessage{
-			{Role: "user", Content: "instead of single ip, I want to specify list of IPs"},
+			{Role: "user", Content: "I'm working on something"},
 		}, []types.Tool{
 			{Name: "Task", InputSchema: types.ToolSchema{Type: "object"}},
 			{Name: "Read", InputSchema: types.ToolSchema{Type: "object"}},

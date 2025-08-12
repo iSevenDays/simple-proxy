@@ -2,6 +2,7 @@ package test
 
 import (
 	"bytes"
+	"claude-proxy/circuitbreaker"
 	"claude-proxy/config"
 	"claude-proxy/proxy"
 	"encoding/json"
@@ -30,6 +31,7 @@ func TestProxyIntegration(t *testing.T) {
 		Port:                   "3456",
 		ToolCorrectionEnabled:  false, // Disable for basic integration test
 		SkipTools:              []string{},
+		HealthManager:          circuitbreaker.NewHealthManager(circuitbreaker.DefaultConfig()),
 	}
 
 	// Create mock backend server
@@ -156,6 +158,7 @@ func TestProxyToolCallIntegration(t *testing.T) {
 		Port:                   "3456",
 		ToolCorrectionEnabled:  false,
 		SkipTools:              []string{},
+		HealthManager:          circuitbreaker.NewHealthManager(circuitbreaker.DefaultConfig()),
 	}
 
 	// Mock server that returns tool calls
@@ -328,6 +331,7 @@ func TestProxyErrorHandling(t *testing.T) {
 					Port:                   "3456",
 					ToolCorrectionEnabled:  false,
 					SkipTools:              []string{},
+					HealthManager:          circuitbreaker.NewHealthManager(circuitbreaker.DefaultConfig()),
 				}
 			} else {
 				cfg = config.GetDefaultConfig()

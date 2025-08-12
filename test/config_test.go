@@ -30,7 +30,9 @@ SMALL_MODEL_ENDPOINT=http://192.168.0.46:11434/v1/chat/completions
 SMALL_MODEL_API_KEY=ollama
 TOOL_CORRECTION_ENDPOINT=http://192.168.0.46:11434/v1/chat/completions
 TOOL_CORRECTION_API_KEY=ollama
-CORRECTION_MODEL=qwen2.5-coder:latest`,
+CORRECTION_MODEL=qwen2.5-coder:latest
+LOG_FULL_TOOLS=false
+CONVERSATION_TRUNCATION=200`,
 			expectedBig:   "http://192.168.0.24:8080/v1/chat/completions",
 			expectedSmall: "http://192.168.0.46:11434/v1/chat/completions",
 			expectError:   false,
@@ -151,7 +153,9 @@ SMALL_MODEL_ENDPOINT=http://test:11434/v1/chat/completions
 SMALL_MODEL_API_KEY=test-key
 TOOL_CORRECTION_ENDPOINT=http://test:11434/v1/chat/completions
 TOOL_CORRECTION_API_KEY=test-key
-CORRECTION_MODEL=test-correction`
+CORRECTION_MODEL=test-correction
+LOG_FULL_TOOLS=false
+CONVERSATION_TRUNCATION=200`
 			if tt.skipTools != "" {
 				envContent += "\nSKIP_TOOLS=" + tt.skipTools
 			}
@@ -322,6 +326,8 @@ SMALL_MODEL_API_KEY=test-key
 TOOL_CORRECTION_ENDPOINT=http://test:11434/v1/chat/completions
 TOOL_CORRECTION_API_KEY=test-key
 CORRECTION_MODEL=test-correction
+LOG_FULL_TOOLS=false
+CONVERSATION_TRUNCATION=200
 `
 	envPath := filepath.Join(tempDir, ".env")
 	err = os.WriteFile(envPath, []byte(envContent), 0644)
@@ -408,6 +414,8 @@ SMALL_MODEL_API_KEY=test-key
 TOOL_CORRECTION_ENDPOINT=http://test:11434/v1/chat/completions
 TOOL_CORRECTION_API_KEY=test-key
 CORRECTION_MODEL=test-correction
+LOG_FULL_TOOLS=false
+CONVERSATION_TRUNCATION=200
 `
 			if tt.shouldHaveVar {
 				envContent += "PRINT_SYSTEM_MESSAGE=" + tt.envValue + "\n"
@@ -482,6 +490,8 @@ SMALL_MODEL_API_KEY=test-key
 TOOL_CORRECTION_ENDPOINT=http://test:11434/v1/chat/completions
 TOOL_CORRECTION_API_KEY=test-key
 CORRECTION_MODEL=test-correction
+LOG_FULL_TOOLS=false
+CONVERSATION_TRUNCATION=200
 `
 			if tt.shouldHaveVar {
 				envContent += "DISABLE_SMALL_MODEL_LOGGING=" + tt.envValue + "\n"
@@ -556,6 +566,8 @@ SMALL_MODEL_API_KEY=test-key
 TOOL_CORRECTION_ENDPOINT=http://test:11434/v1/chat/completions
 TOOL_CORRECTION_API_KEY=test-key
 CORRECTION_MODEL=test-correction
+LOG_FULL_TOOLS=false
+CONVERSATION_TRUNCATION=200
 `
 			if tt.shouldHaveVar {
 				envContent += "DISABLE_TOOL_CORRECTION_LOGGING=" + tt.envValue + "\n"
@@ -777,6 +789,8 @@ TOOL_CORRECTION_ENDPOINT=http://test:11434/v1/chat/completions
 TOOL_CORRECTION_API_KEY=test-key
 CORRECTION_MODEL=test-correction
 PRINT_SYSTEM_MESSAGE=true
+LOG_FULL_TOOLS=false
+CONVERSATION_TRUNCATION=false
 `
 	envPath := filepath.Join(tempDir, ".env")
 	err = os.WriteFile(envPath, []byte(envContent), 0644)

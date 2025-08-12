@@ -278,7 +278,18 @@ func TransformAnthropicToOpenAI(ctx context.Context, req types.AnthropicRequest,
 								openaiMsg.Content = getEmptyToolResultMessage(contentMap)
 								logger.LogEmptyToolResult(ctx, loggerInstance, openaiMsg.Content)
 							} else {
-								openaiMsg.Content = text
+								// Apply system message overrides to tool result content
+								processedText := text
+								if len(cfg.SystemMessageOverrides.RemovePatterns) > 0 || 
+								   len(cfg.SystemMessageOverrides.Replacements) > 0 ||
+								   cfg.SystemMessageOverrides.Prepend != "" ||
+								   cfg.SystemMessageOverrides.Append != "" {
+									processedText = config.ApplySystemMessageOverrides(text, cfg.SystemMessageOverrides)
+									if processedText != text {
+										logger.LogSystemOverride(ctx, loggerInstance, len(text), len(processedText))
+									}
+								}
+								openaiMsg.Content = processedText
 							}
 						} else if cfg.HandleEmptyToolResults {
 							// No content field - provide default message

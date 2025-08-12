@@ -46,6 +46,9 @@ type Config struct {
 	ConversationLogFullTools   bool   `json:"conversation_log_full_tools"`  // Log full tool definitions vs tool names only
 	ConversationTruncation     int    `json:"conversation_truncation"`      // Maximum message length (0 = disabled)
 
+	// Connection timeout settings
+	DefaultConnectionTimeout int `json:"default_connection_timeout"` // Connection timeout in seconds for all endpoints
+
 	// System message overrides (loaded from system_overrides.yaml)
 	SystemMessageOverrides SystemMessageOverrides `json:"system_message_overrides"`
 
@@ -124,6 +127,7 @@ func LoadConfigWithEnv() (*Config, error) {
 		ConversationMaskSensitive:  true,                     // Enable sensitive data masking by default
 		ConversationLogFullTools:   false,                    // Log tool names only by default
 		ConversationTruncation:     0,                        // No truncation by default
+		DefaultConnectionTimeout:   30,                       // 30 seconds default connection timeout
 		SystemMessageOverrides:     SystemMessageOverrides{}, // Empty by default
 		HealthManager:              circuitbreaker.NewHealthManager(circuitbreaker.DefaultConfig()),
 	}
@@ -382,6 +386,22 @@ func LoadConfigWithEnv() (*Config, error) {
 		return nil, fmt.Errorf("CONVERSATION_TRUNCATION must be set in .env file")
 	}
 
+	// Parse DEFAULT_CONNECTION_TIMEOUT (optional, defaults to 30 seconds)
+	if connectionTimeout, exists := envVars["DEFAULT_CONNECTION_TIMEOUT"]; exists {
+		var timeoutValue int
+		if n, err := fmt.Sscanf(connectionTimeout, "%d", &timeoutValue); n != 1 || err != nil {
+			return nil, fmt.Errorf("DEFAULT_CONNECTION_TIMEOUT must be a positive number, got: %s", connectionTimeout)
+		}
+		if timeoutValue < 1 {
+			return nil, fmt.Errorf("DEFAULT_CONNECTION_TIMEOUT must be a positive number, got: %d", timeoutValue)
+		}
+		cfg.DefaultConnectionTimeout = timeoutValue
+		log.Printf("🔗 Configured DEFAULT_CONNECTION_TIMEOUT: %d seconds", timeoutValue)
+	} else {
+		cfg.DefaultConnectionTimeout = 30 // Default to 30 seconds if not specified
+		log.Printf("🔗 Using default DEFAULT_CONNECTION_TIMEOUT: 30 seconds")
+	}
+
 	// Load tool description overrides from YAML file
 	toolDescriptions, err := LoadToolDescriptions()
 	if err != nil {
@@ -629,7 +649,8 @@ func ApplySystemMessageOverrides(originalMessage string, overrides SystemMessage
 	return message
 }
 
-// GetBigModelEndpoint returns the next BIG_MODEL endpoint with round-robin failover
+// GetBigModelEndpoint returns the next BIG_MODEL endpoint with simple round-robin
+// Note: Big model endpoints bypass circuit breaker since 30min+ processing time is normal
 func (c *Config) GetBigModelEndpoint() string {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
@@ -638,10 +659,12 @@ func (c *Config) GetBigModelEndpoint() string {
 		return ""
 	}
 
-	// Reorder endpoints by success rate periodically
-	c.HealthManager.ReorderBySuccess(c.BigModelEndpoints, "BigModel")
-
-	return c.HealthManager.SelectHealthyEndpoint(c.BigModelEndpoints, &c.bigModelIndex)
+	// Simple round-robin without circuit breaker for big models
+	// (30+ minute processing time is acceptable for big models)
+	endpoint := c.BigModelEndpoints[c.bigModelIndex%len(c.BigModelEndpoints)]
+	c.bigModelIndex++
+	
+	return endpoint
 }
 
 // GetSmallModelEndpoint returns the next SMALL_MODEL endpoint with round-robin failover

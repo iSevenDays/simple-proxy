@@ -222,6 +222,8 @@ SMALL_MODEL_API_KEY=test-key
 TOOL_CORRECTION_ENDPOINT=http://test:11434/v1/chat/completions
 TOOL_CORRECTION_API_KEY=test-key
 CORRECTION_MODEL=integration-correction-model
+LOG_FULL_TOOLS=false
+CONVERSATION_TRUNCATION=false
 `
 	envPath := filepath.Join(tempDir, ".env")
 	err = ioutil.WriteFile(envPath, []byte(envContent), 0644)

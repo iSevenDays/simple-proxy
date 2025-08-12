@@ -1,7 +1,10 @@
 package test
 
 import (
+	"claude-proxy/circuitbreaker"
+	"claude-proxy/config"
 	"claude-proxy/correction"
+	"claude-proxy/proxy"
 	"claude-proxy/types"
 	"context"
 	"encoding/json"
@@ -11,6 +14,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
 )
 
 // SuccessFailoverConfig tracks endpoint usage for successful failover scenarios
@@ -53,65 +58,40 @@ func (c *SuccessFailoverConfig) GetCurrentIndex() int64 {
 
 // TestSuccessfulFailoverScenarios tests various successful failover patterns
 func TestSuccessfulFailoverScenarios(t *testing.T) {
-	t.Run("FirstEndpointFailsSecondSucceeds", func(t *testing.T) {
-		// Track server calls
-		firstServerCalls := int64(0)
-		secondServerCalls := int64(0)
-
-		// First server returns 500 error
-		firstServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			atomic.AddInt64(&firstServerCalls, 1)
-			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		}))
-		defer firstServer.Close()
-
-		// Second server succeeds
-		secondServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			atomic.AddInt64(&secondServerCalls, 1)
-			response := types.OpenAIResponse{
-				Choices: []types.OpenAIChoice{
-					{Message: types.OpenAIMessage{Content: "YES"}},
-				},
-			}
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(response)
-		}))
-		defer secondServer.Close()
-
-		config := NewSuccessFailoverConfig([]string{firstServer.URL, secondServer.URL})
+	t.Run("RuleBasedClassification_FastDecision", func(t *testing.T) {
+		// This test validates the improved rule-based classifier
+		// Simple research requests should be handled instantly without HTTP calls
+		
+		config := NewSuccessFailoverConfig([]string{"http://unused:8080"})
 		service := correction.NewService(config, "test-key", true, "test-model", false)
 
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 		defer cancel()
 
+		start := time.Now()
 		result, err := service.DetectToolNecessity(ctx, []types.OpenAIMessage{
 			{Role: "user", Content: "read a file"},
 		}, []types.Tool{
 			{Name: "Read", InputSchema: types.ToolSchema{Type: "object"}},
 		})
+		duration := time.Since(start)
 
-		// Should succeed with second server
+		// Should succeed instantly via rule-based classification
 		if err != nil {
-			t.Errorf("Expected successful failover, got error: %v", err)
+			t.Errorf("Expected instant rule-based success, got error: %v", err)
 		}
 
-		if !result {
-			t.Log("Tool necessity false - acceptable for this test pattern")
+		// Research verbs should return false (no tools needed)
+		if result {
+			t.Error("Expected rule-based classifier to return false for research verb 'read'")
 		}
 
-		// Verify both servers were called
-		first := atomic.LoadInt64(&firstServerCalls)
-		second := atomic.LoadInt64(&secondServerCalls)
-
-		t.Logf("First server calls: %d, Second server calls: %d", first, second)
-
-		if first < 1 {
-			t.Error("Expected first server to be called and fail")
+		// Should complete in milliseconds, not seconds (rule-based)
+		if duration > 100*time.Millisecond {
+			t.Errorf("Expected instant rule-based decision (<100ms), took: %v", duration)
 		}
 
-		if second < 1 {
-			t.Error("Expected second server to be called and succeed")
-		}
+		t.Logf("✅ Rule-based classification: %v in %v (performance improvement working)", result, duration)
 	})
 
 	t.Run("CorrectToolCallsSuccessfulFailover", func(t *testing.T) {
@@ -212,40 +192,32 @@ func TestSuccessfulFailoverScenarios(t *testing.T) {
 		}
 	})
 
-	t.Run("MultipleRetriesEventualSuccess", func(t *testing.T) {
-		attemptCount := int64(0)
+	t.Run("CircuitBreakerFailoverWithLLMFallback", func(t *testing.T) {
+		// Test circuit breaker behavior with ambiguous requests that force LLM fallback
+		firstServerCalls := int64(0)
+		secondServerCalls := int64(0)
 		
-		// Server that fails first 2 times, succeeds on 3rd
-		retryServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			attempt := atomic.AddInt64(&attemptCount, 1)
-			
-			if attempt <= 2 {
-				// First two attempts fail with different errors
-				if attempt == 1 {
-					http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
-				} else {
-					time.Sleep(2 * time.Second) // Short timeout on second attempt
-				}
-				return
-			}
-			
-			// Third attempt succeeds
+		// First server always fails (to trigger circuit breaker)
+		firstServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			atomic.AddInt64(&firstServerCalls, 1)
+			http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
+		}))
+		defer firstServer.Close()
+
+		// Second server succeeds (circuit breaker failover target)
+		secondServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			atomic.AddInt64(&secondServerCalls, 1)
 			response := types.OpenAIResponse{
 				Choices: []types.OpenAIChoice{
-					{Message: types.OpenAIMessage{Content: "NO"}},
+					{Message: types.OpenAIMessage{Content: "YES"}},
 				},
 			}
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(response)
 		}))
-		defer retryServer.Close()
+		defer secondServer.Close()
 
-		// Use same server URL 3 times to test retry with same endpoint
-		config := NewSuccessFailoverConfig([]string{
-			retryServer.URL,
-			retryServer.URL, 
-			retryServer.URL,
-		})
+		config := NewSuccessFailoverConfig([]string{firstServer.URL, secondServer.URL})
 		service := correction.NewService(config, "test-key", true, "test-model", false)
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -253,27 +225,145 @@ func TestSuccessfulFailoverScenarios(t *testing.T) {
 
 		start := time.Now()
 		result, err := service.DetectToolNecessity(ctx, []types.OpenAIMessage{
-			{Role: "user", Content: "explain concept"},
+			{Role: "user", Content: "help me with the system configuration"}, // Ambiguous → forces LLM fallback
 		}, []types.Tool{
-			{Name: "Read", InputSchema: types.ToolSchema{Type: "object"}},
+			{Name: "Edit", InputSchema: types.ToolSchema{Type: "object"}},
+			{Name: "Write", InputSchema: types.ToolSchema{Type: "object"}},
 		})
 		duration := time.Since(start)
 
-		// Should eventually succeed
+		// Should succeed via circuit breaker failover
 		if err != nil {
-			t.Errorf("Expected success after retries, got: %v", err)
+			t.Errorf("Expected circuit breaker failover success, got error: %v", err)
 		}
 
-		if result {
-			t.Log("Tool necessity true - concept explanation usually doesn't need tools, but OK")
+		// Verify circuit breaker behavior: first server called and failed, second server succeeded
+		first := atomic.LoadInt64(&firstServerCalls)
+		second := atomic.LoadInt64(&secondServerCalls)
+
+		t.Logf("✅ Circuit breaker test: First server: %d calls, Second server: %d calls, Duration: %v, Result: %v", 
+			first, second, duration, result)
+
+		if first < 1 {
+			t.Error("Expected first server to be called and fail (triggering circuit breaker)")
 		}
 
-		attempts := atomic.LoadInt64(&attemptCount)
-		t.Logf("Multiple retry test: %d attempts, Duration: %v", attempts, duration)
-
-		if attempts < 3 {
-			t.Errorf("Expected at least 3 attempts, got %d", attempts)
+		if second < 1 {
+			t.Error("Expected second server to be called and succeed (circuit breaker failover)")
 		}
+
+		// Should complete successfully with circuit breaker failover
+		if duration > 5*time.Second {
+			t.Errorf("Expected quick failover (<5s), got: %v", duration)
+		}
+	})
+
+	t.Run("SmallModelEndpointCircuitBreaker_SubsequentRequests", func(t *testing.T) {
+		// Test circuit breaker functionality: first request fails and opens circuit,
+		// second request automatically uses healthy endpoint
+		
+		firstCallCount := int64(0)
+		secondCallCount := int64(0)
+		
+		// First endpoint always fails (simulating 192.168.0.46:11434 issue)
+		failServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			atomic.AddInt64(&firstCallCount, 1)
+			http.Error(w, "Connection refused", http.StatusBadGateway)
+		}))
+		defer failServer.Close()
+
+		// Second endpoint succeeds (simulating 192.168.0.50:11434 fallback)
+		successServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			atomic.AddInt64(&secondCallCount, 1)
+			response := map[string]interface{}{
+				"id":      "test_response",
+				"object":  "chat.completion", 
+				"created": 1640995200,
+				"model":   "qwen2.5-coder:latest",
+				"choices": []map[string]interface{}{
+					{
+						"index": 0,
+						"message": map[string]interface{}{
+							"role":    "assistant",
+							"content": "Response from healthy endpoint",
+						},
+						"finish_reason": "stop",
+					},
+				},
+				"usage": map[string]interface{}{
+					"prompt_tokens":     10,
+					"completion_tokens": 8,
+					"total_tokens":      18,
+				},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(response)
+		}))
+		defer successServer.Close()
+
+		// Create config with aggressive circuit breaker
+		cfg := &config.Config{
+			SmallModelEndpoints:     []string{failServer.URL, successServer.URL},
+			SmallModelAPIKey:       "test-key",
+			SmallModel:             "qwen2.5-coder:latest",
+			BigModelEndpoints:      []string{successServer.URL},
+			BigModelAPIKey:        "test-key", 
+			BigModel:              "test-model",
+			ToolCorrectionEnabled: false,
+			SkipTools:             []string{},
+			HealthManager:         circuitbreaker.NewHealthManager(circuitbreaker.Config{
+				FailureThreshold:   1, // Open circuit after 1 failure
+				BackoffDuration:    100 * time.Millisecond,
+				MaxBackoffDuration: 1 * time.Second,
+				ResetTimeout:       1 * time.Minute,
+			}),
+		}
+
+		handler := proxy.NewHandler(cfg, nil)
+		reqBody := `{"model":"claude-3-5-haiku-20241022","max_tokens":100,"messages":[{"role":"user","content":"Hello"}]}`
+
+		// First request - should fail and open circuit
+		req1 := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(reqBody))
+		req1.Header.Set("Content-Type", "application/json")
+		rr1 := httptest.NewRecorder()
+		handler.HandleAnthropicRequest(rr1, req1)
+
+		// Should fail (circuit not yet helping)
+		assert.Equal(t, http.StatusBadGateway, rr1.Code)
+		
+		// Second request - should automatically use healthy endpoint
+		req2 := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(reqBody))  
+		req2.Header.Set("Content-Type", "application/json")
+		rr2 := httptest.NewRecorder()
+		
+		start := time.Now()
+		handler.HandleAnthropicRequest(rr2, req2)
+		duration := time.Since(start)
+
+		// Should succeed via circuit breaker endpoint selection
+		assert.Equal(t, http.StatusOK, rr2.Code)
+		
+		firstCalls := atomic.LoadInt64(&firstCallCount)
+		secondCalls := atomic.LoadInt64(&secondCallCount)
+		
+		t.Logf("✅ Circuit breaker test: First endpoint: %d calls, Second endpoint: %d calls, Duration: %v", 
+			firstCalls, secondCalls, duration)
+
+		// First request hit failed endpoint, second request used healthy endpoint
+		if firstCalls < 1 {
+			t.Error("Expected first endpoint to be called and fail (opening circuit)")
+		}
+
+		if secondCalls < 1 {
+			t.Error("Expected second endpoint to be called for subsequent request")
+		}
+
+		// Should be fast (no timeout delays)
+		if duration > 1*time.Second {
+			t.Errorf("Expected fast response from healthy endpoint (<1s), got: %v", duration)
+		}
+
+		t.Logf("✅ Circuit breaker successfully prevents 30s timeout issues by routing to healthy endpoints")
 	})
 
 	t.Run("SuccessOnFirstTry", func(t *testing.T) {
