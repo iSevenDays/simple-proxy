@@ -75,6 +75,47 @@ type Config struct {
 
 	// Circuit breaker health manager
 	HealthManager *circuitbreaker.HealthManager `json:"-"`
+	
+	// Observability logger (optional, can be nil during initial config loading)
+	obsLogger interface {
+		Info(component, category, requestID, message string, fields map[string]interface{})
+		Warn(component, category, requestID, message string, fields map[string]interface{})
+		Error(component, category, requestID, message string, fields map[string]interface{})
+	} `json:"-"`
+}
+
+// SetObservabilityLogger sets the observability logger for structured logging
+func (c *Config) SetObservabilityLogger(obsLogger interface {
+	Info(component, category, requestID, message string, fields map[string]interface{})
+	Warn(component, category, requestID, message string, fields map[string]interface{})
+	Error(component, category, requestID, message string, fields map[string]interface{})
+}) {
+	c.obsLogger = obsLogger
+	// Also set the obsLogger on the HealthManager for circuit breaker logging
+	if c.HealthManager != nil {
+		c.HealthManager.SetObservabilityLogger(obsLogger)
+	}
+}
+
+// logInfo logs an info message with structured data if obsLogger is available
+func (c *Config) logInfo(component, category, requestID, message string, fields map[string]interface{}) {
+	if c.obsLogger != nil {
+		c.obsLogger.Info(component, category, requestID, message, fields)
+	}
+}
+
+// logWarn logs a warning message with structured data if obsLogger is available
+func (c *Config) logWarn(component, category, requestID, message string, fields map[string]interface{}) {
+	if c.obsLogger != nil {
+		c.obsLogger.Warn(component, category, requestID, message, fields)
+	}
+}
+
+// logError logs an error message with structured data if obsLogger is available
+func (c *Config) logError(component, category, requestID, message string, fields map[string]interface{}) {
+	if c.obsLogger != nil {
+		c.obsLogger.Error(component, category, requestID, message, fields)
+	}
 }
 
 // GetDefaultConfig returns a default configuration for testing
@@ -135,21 +176,27 @@ func LoadConfigWithEnv() (*Config, error) {
 	// All models and endpoints are required when .env exists - no fallbacks
 	if bigModel, exists := envVars["BIG_MODEL"]; exists && bigModel != "" {
 		cfg.BigModel = bigModel
-		log.Printf("🔧 Configured BIG_MODEL: %s", bigModel)
+		cfg.logInfo("configuration", "request", "", "Configured BIG_MODEL", map[string]interface{}{
+			"model": bigModel,
+		})
 	} else {
 		return nil, fmt.Errorf("BIG_MODEL must be set in .env file")
 	}
 
 	if smallModel, exists := envVars["SMALL_MODEL"]; exists && smallModel != "" {
 		cfg.SmallModel = smallModel
-		log.Printf("🔧 Configured SMALL_MODEL: %s", smallModel)
+		cfg.logInfo("configuration", "request", "", "Configured SMALL_MODEL", map[string]interface{}{
+			"model": smallModel,
+		})
 	} else {
 		return nil, fmt.Errorf("SMALL_MODEL must be set in .env file")
 	}
 
 	if correctionModel, exists := envVars["CORRECTION_MODEL"]; exists && correctionModel != "" {
 		cfg.CorrectionModel = correctionModel
-		log.Printf("🔧 Configured CORRECTION_MODEL: %s", correctionModel)
+		cfg.logInfo("configuration", "request", "", "Configured CORRECTION_MODEL", map[string]interface{}{
+			"model": correctionModel,
+		})
 	} else {
 		return nil, fmt.Errorf("CORRECTION_MODEL must be set in .env file")
 	}
@@ -168,7 +215,10 @@ func LoadConfigWithEnv() (*Config, error) {
 			}
 		}
 		cfg.BigModelEndpoints = filteredEndpoints
-		log.Printf("🔧 Configured BIG_MODEL_ENDPOINT: %v (%d endpoints)", cfg.BigModelEndpoints, len(cfg.BigModelEndpoints))
+		cfg.logInfo("configuration", "request", "", "Configured BIG_MODEL_ENDPOINT", map[string]interface{}{
+			"endpoints": cfg.BigModelEndpoints,
+			"endpoint_count": len(cfg.BigModelEndpoints),
+		})
 	} else {
 		return nil, fmt.Errorf("BIG_MODEL_ENDPOINT must be set in .env file")
 	}
@@ -187,21 +237,28 @@ func LoadConfigWithEnv() (*Config, error) {
 			}
 		}
 		cfg.SmallModelEndpoints = filteredEndpoints
-		log.Printf("🔧 Configured SMALL_MODEL_ENDPOINT: %v (%d endpoints)", cfg.SmallModelEndpoints, len(cfg.SmallModelEndpoints))
+		cfg.logInfo("configuration", "request", "", "Configured SMALL_MODEL_ENDPOINT", map[string]interface{}{
+			"endpoints": cfg.SmallModelEndpoints,
+			"endpoint_count": len(cfg.SmallModelEndpoints),
+		})
 	} else {
 		return nil, fmt.Errorf("SMALL_MODEL_ENDPOINT must be set in .env file")
 	}
 
 	if bigAPIKey, exists := envVars["BIG_MODEL_API_KEY"]; exists && bigAPIKey != "" {
 		cfg.BigModelAPIKey = bigAPIKey
-		log.Printf("🔧 Configured BIG_MODEL_API_KEY: %s", maskAPIKey(bigAPIKey))
+		cfg.logInfo("configuration", "request", "", "Configured BIG_MODEL_API_KEY", map[string]interface{}{
+			"api_key_masked": maskAPIKey(bigAPIKey),
+		})
 	} else {
 		return nil, fmt.Errorf("BIG_MODEL_API_KEY must be set in .env file")
 	}
 
 	if smallAPIKey, exists := envVars["SMALL_MODEL_API_KEY"]; exists && smallAPIKey != "" {
 		cfg.SmallModelAPIKey = smallAPIKey
-		log.Printf("🔧 Configured SMALL_MODEL_API_KEY: %s", maskAPIKey(smallAPIKey))
+		cfg.logInfo("configuration", "request", "", "Configured SMALL_MODEL_API_KEY", map[string]interface{}{
+			"api_key_masked": maskAPIKey(smallAPIKey),
+		})
 	} else {
 		return nil, fmt.Errorf("SMALL_MODEL_API_KEY must be set in .env file")
 	}
@@ -220,14 +277,19 @@ func LoadConfigWithEnv() (*Config, error) {
 			}
 		}
 		cfg.ToolCorrectionEndpoints = filteredEndpoints
-		log.Printf("🔧 Configured TOOL_CORRECTION_ENDPOINT: %v (%d endpoints)", cfg.ToolCorrectionEndpoints, len(cfg.ToolCorrectionEndpoints))
+		cfg.logInfo("configuration", "request", "", "Configured TOOL_CORRECTION_ENDPOINT", map[string]interface{}{
+			"endpoints": cfg.ToolCorrectionEndpoints,
+			"endpoint_count": len(cfg.ToolCorrectionEndpoints),
+		})
 	} else {
 		return nil, fmt.Errorf("TOOL_CORRECTION_ENDPOINT must be set in .env file")
 	}
 
 	if toolCorrectionAPIKey, exists := envVars["TOOL_CORRECTION_API_KEY"]; exists && toolCorrectionAPIKey != "" {
 		cfg.ToolCorrectionAPIKey = toolCorrectionAPIKey
-		log.Printf("🔧 Configured TOOL_CORRECTION_API_KEY: %s", maskAPIKey(toolCorrectionAPIKey))
+		cfg.logInfo("configuration", "request", "", "Configured TOOL_CORRECTION_API_KEY", map[string]interface{}{
+			"api_key_masked": maskAPIKey(toolCorrectionAPIKey),
+		})
 	} else {
 		return nil, fmt.Errorf("TOOL_CORRECTION_API_KEY must be set in .env file")
 	}
@@ -247,17 +309,23 @@ func LoadConfigWithEnv() (*Config, error) {
 			}
 		}
 		cfg.SkipTools = filteredTools
-		log.Printf("🚫 Configured SKIP_TOOLS: %v", cfg.SkipTools)
+		cfg.logInfo("configuration", "request", "", "Configured SKIP_TOOLS", map[string]interface{}{
+			"skip_tools": cfg.SkipTools,
+		})
 	}
 
 	// Parse PRINT_SYSTEM_MESSAGE (optional, defaults to false)
 	if printSystemMessage, exists := envVars["PRINT_SYSTEM_MESSAGE"]; exists {
 		if printSystemMessage == "true" || printSystemMessage == "1" {
 			cfg.PrintSystemMessage = true
-			log.Printf("🖨️  Configured PRINT_SYSTEM_MESSAGE: enabled")
+			cfg.logInfo("configuration", "request", "", "Configured PRINT_SYSTEM_MESSAGE", map[string]interface{}{
+				"enabled": true,
+			})
 		} else {
 			cfg.PrintSystemMessage = false
-			log.Printf("🖨️  Configured PRINT_SYSTEM_MESSAGE: disabled")
+			cfg.logInfo("configuration", "request", "", "Configured PRINT_SYSTEM_MESSAGE", map[string]interface{}{
+				"enabled": false,
+			})
 		}
 	}
 
@@ -265,10 +333,14 @@ func LoadConfigWithEnv() (*Config, error) {
 	if printToolSchemas, exists := envVars["PRINT_TOOL_SCHEMAS"]; exists {
 		if printToolSchemas == "true" || printToolSchemas == "1" {
 			cfg.PrintToolSchemas = true
-			log.Printf("🔧 Configured PRINT_TOOL_SCHEMAS: enabled")
+			cfg.logInfo("configuration", "request", "", "Configured PRINT_TOOL_SCHEMAS", map[string]interface{}{
+				"enabled": true,
+			})
 		} else {
 			cfg.PrintToolSchemas = false
-			log.Printf("🔧 Configured PRINT_TOOL_SCHEMAS: disabled")
+			cfg.logInfo("configuration", "request", "", "Configured PRINT_TOOL_SCHEMAS", map[string]interface{}{
+				"enabled": false,
+			})
 		}
 	}
 
@@ -276,10 +348,16 @@ func LoadConfigWithEnv() (*Config, error) {
 	if disableSmallLogging, exists := envVars["DISABLE_SMALL_MODEL_LOGGING"]; exists {
 		if disableSmallLogging == "true" || disableSmallLogging == "1" {
 			cfg.DisableSmallModelLogging = true
-			log.Printf("🔇 Configured DISABLE_SMALL_MODEL_LOGGING: enabled (Haiku logging disabled)")
+			cfg.logInfo("configuration", "request", "", "Configured DISABLE_SMALL_MODEL_LOGGING", map[string]interface{}{
+				"enabled": true,
+				"description": "Haiku logging disabled",
+			})
 		} else {
 			cfg.DisableSmallModelLogging = false
-			log.Printf("🔊 Configured DISABLE_SMALL_MODEL_LOGGING: disabled (normal logging)")
+			cfg.logInfo("configuration", "request", "", "Configured DISABLE_SMALL_MODEL_LOGGING", map[string]interface{}{
+				"enabled": false,
+				"description": "normal logging",
+			})
 		}
 	}
 
@@ -287,10 +365,16 @@ func LoadConfigWithEnv() (*Config, error) {
 	if disableToolCorrectionLogging, exists := envVars["DISABLE_TOOL_CORRECTION_LOGGING"]; exists {
 		if disableToolCorrectionLogging == "true" || disableToolCorrectionLogging == "1" {
 			cfg.DisableToolCorrectionLogging = true
-			log.Printf("🔇 Configured DISABLE_TOOL_CORRECTION_LOGGING: enabled (tool correction logging disabled)")
+			cfg.logInfo("configuration", "request", "", "Configured DISABLE_TOOL_CORRECTION_LOGGING", map[string]interface{}{
+				"enabled": true,
+				"description": "tool correction logging disabled",
+			})
 		} else {
 			cfg.DisableToolCorrectionLogging = false
-			log.Printf("🔊 Configured DISABLE_TOOL_CORRECTION_LOGGING: disabled (normal logging)")
+			cfg.logInfo("configuration", "request", "", "Configured DISABLE_TOOL_CORRECTION_LOGGING", map[string]interface{}{
+				"enabled": false,
+				"description": "normal logging",
+			})
 		}
 	}
 
@@ -298,10 +382,14 @@ func LoadConfigWithEnv() (*Config, error) {
 	if handleEmptyResults, exists := envVars["HANDLE_EMPTY_TOOL_RESULTS"]; exists {
 		if handleEmptyResults == "false" || handleEmptyResults == "0" {
 			cfg.HandleEmptyToolResults = false
-			log.Printf("🔧 Configured HANDLE_EMPTY_TOOL_RESULTS: disabled")
+			cfg.logInfo("configuration", "request", "", "Configured HANDLE_EMPTY_TOOL_RESULTS", map[string]interface{}{
+				"enabled": false,
+			})
 		} else {
 			cfg.HandleEmptyToolResults = true
-			log.Printf("🔧 Configured HANDLE_EMPTY_TOOL_RESULTS: enabled")
+			cfg.logInfo("configuration", "request", "", "Configured HANDLE_EMPTY_TOOL_RESULTS", map[string]interface{}{
+				"enabled": true,
+			})
 		}
 	}
 
@@ -309,10 +397,14 @@ func LoadConfigWithEnv() (*Config, error) {
 	if handleEmptyUser, exists := envVars["HANDLE_EMPTY_USER_MESSAGES"]; exists {
 		if handleEmptyUser == "true" || handleEmptyUser == "1" {
 			cfg.HandleEmptyUserMessages = true
-			log.Printf("🔧 Configured HANDLE_EMPTY_USER_MESSAGES: enabled")
+			cfg.logInfo("configuration", "request", "", "Configured HANDLE_EMPTY_USER_MESSAGES", map[string]interface{}{
+				"enabled": true,
+			})
 		} else {
 			cfg.HandleEmptyUserMessages = false
-			log.Printf("🔧 Configured HANDLE_EMPTY_USER_MESSAGES: disabled")
+			cfg.logInfo("configuration", "request", "", "Configured HANDLE_EMPTY_USER_MESSAGES", map[string]interface{}{
+				"enabled": false,
+			})
 		}
 	}
 
@@ -320,10 +412,14 @@ func LoadConfigWithEnv() (*Config, error) {
 	if conversationLogging, exists := envVars["CONVERSATION_LOGGING_ENABLED"]; exists {
 		if conversationLogging == "true" || conversationLogging == "1" {
 			cfg.ConversationLoggingEnabled = true
-			log.Printf("💬 Configured CONVERSATION_LOGGING_ENABLED: enabled")
+			cfg.logInfo("configuration", "request", "", "Configured CONVERSATION_LOGGING_ENABLED", map[string]interface{}{
+				"enabled": true,
+			})
 		} else {
 			cfg.ConversationLoggingEnabled = false
-			log.Printf("💬 Configured CONVERSATION_LOGGING_ENABLED: disabled")
+			cfg.logInfo("configuration", "request", "", "Configured CONVERSATION_LOGGING_ENABLED", map[string]interface{}{
+				"enabled": false,
+			})
 		}
 	}
 
@@ -332,9 +428,14 @@ func LoadConfigWithEnv() (*Config, error) {
 		validLevels := map[string]bool{"DEBUG": true, "INFO": true, "WARN": true, "ERROR": true}
 		if validLevels[strings.ToUpper(logLevel)] {
 			cfg.ConversationLogLevel = strings.ToUpper(logLevel)
-			log.Printf("📊 Configured CONVERSATION_LOG_LEVEL: %s", cfg.ConversationLogLevel)
+			cfg.logInfo("configuration", "request", "", "Configured CONVERSATION_LOG_LEVEL", map[string]interface{}{
+				"log_level": cfg.ConversationLogLevel,
+			})
 		} else {
-			log.Printf("⚠️  Warning: Invalid CONVERSATION_LOG_LEVEL '%s', using default 'INFO'", logLevel)
+			cfg.logWarn("configuration", "warning", "", "Invalid CONVERSATION_LOG_LEVEL, using default", map[string]interface{}{
+				"invalid_level": logLevel,
+				"default_level": "INFO",
+			})
 			cfg.ConversationLogLevel = "INFO"
 		}
 	}
@@ -343,10 +444,14 @@ func LoadConfigWithEnv() (*Config, error) {
 	if maskSensitive, exists := envVars["CONVERSATION_MASK_SENSITIVE"]; exists {
 		if maskSensitive == "false" || maskSensitive == "0" {
 			cfg.ConversationMaskSensitive = false
-			log.Printf("🔒 Configured CONVERSATION_MASK_SENSITIVE: disabled")
+			cfg.logInfo("configuration", "request", "", "Configured CONVERSATION_MASK_SENSITIVE", map[string]interface{}{
+				"enabled": false,
+			})
 		} else {
 			cfg.ConversationMaskSensitive = true
-			log.Printf("🔒 Configured CONVERSATION_MASK_SENSITIVE: enabled")
+			cfg.logInfo("configuration", "request", "", "Configured CONVERSATION_MASK_SENSITIVE", map[string]interface{}{
+				"enabled": true,
+			})
 		}
 	}
 
@@ -354,10 +459,16 @@ func LoadConfigWithEnv() (*Config, error) {
 	if logFullTools, exists := envVars["LOG_FULL_TOOLS"]; exists {
 		if logFullTools == "true" || logFullTools == "1" {
 			cfg.ConversationLogFullTools = true
-			log.Printf("🔧 Configured LOG_FULL_TOOLS: enabled (full tool definitions)")
+			cfg.logInfo("configuration", "request", "", "Configured LOG_FULL_TOOLS", map[string]interface{}{
+				"enabled": true,
+				"description": "full tool definitions",
+			})
 		} else if logFullTools == "false" || logFullTools == "0" {
 			cfg.ConversationLogFullTools = false
-			log.Printf("🔧 Configured LOG_FULL_TOOLS: disabled (tool names only)")
+			cfg.logInfo("configuration", "request", "", "Configured LOG_FULL_TOOLS", map[string]interface{}{
+				"enabled": false,
+				"description": "tool names only",
+			})
 		} else {
 			return nil, fmt.Errorf("LOG_FULL_TOOLS must be 'true' or 'false', got: %s", logFullTools)
 		}
@@ -369,7 +480,9 @@ func LoadConfigWithEnv() (*Config, error) {
 	if truncation, exists := envVars["CONVERSATION_TRUNCATION"]; exists {
 		if truncation == "false" || truncation == "0" {
 			cfg.ConversationTruncation = 0
-			log.Printf("✂️  Configured CONVERSATION_TRUNCATION: disabled")
+			cfg.logInfo("configuration", "request", "", "Configured CONVERSATION_TRUNCATION", map[string]interface{}{
+				"enabled": false,
+			})
 		} else {
 			// Try to parse as integer
 			var truncationValue int
@@ -380,7 +493,10 @@ func LoadConfigWithEnv() (*Config, error) {
 				return nil, fmt.Errorf("CONVERSATION_TRUNCATION must be a positive number, got: %d", truncationValue)
 			}
 			cfg.ConversationTruncation = truncationValue
-			log.Printf("✂️  Configured CONVERSATION_TRUNCATION: enabled (%d characters)", truncationValue)
+			cfg.logInfo("configuration", "request", "", "Configured CONVERSATION_TRUNCATION", map[string]interface{}{
+				"enabled": true,
+				"max_characters": truncationValue,
+			})
 		}
 	} else {
 		return nil, fmt.Errorf("CONVERSATION_TRUNCATION must be set in .env file")
@@ -396,16 +512,22 @@ func LoadConfigWithEnv() (*Config, error) {
 			return nil, fmt.Errorf("DEFAULT_CONNECTION_TIMEOUT must be a positive number, got: %d", timeoutValue)
 		}
 		cfg.DefaultConnectionTimeout = timeoutValue
-		log.Printf("🔗 Configured DEFAULT_CONNECTION_TIMEOUT: %d seconds", timeoutValue)
+		cfg.logInfo("configuration", "request", "", "Configured DEFAULT_CONNECTION_TIMEOUT", map[string]interface{}{
+			"timeout_seconds": timeoutValue,
+		})
 	} else {
 		cfg.DefaultConnectionTimeout = 30 // Default to 30 seconds if not specified
-		log.Printf("🔗 Using default DEFAULT_CONNECTION_TIMEOUT: 30 seconds")
+		cfg.logInfo("configuration", "request", "", "Using default DEFAULT_CONNECTION_TIMEOUT", map[string]interface{}{
+			"timeout_seconds": 30,
+		})
 	}
 
 	// Load tool description overrides from YAML file
 	toolDescriptions, err := LoadToolDescriptions()
 	if err != nil {
-		log.Printf("⚠️  Warning: Failed to load tool descriptions from tools_override.yaml: %v", err)
+		cfg.logWarn("configuration", "warning", "", "Failed to load tool descriptions from tools_override.yaml", map[string]interface{}{
+			"error": err.Error(),
+		})
 		// Continue with empty tool descriptions instead of failing
 	} else {
 		cfg.ToolDescriptions = toolDescriptions
@@ -414,7 +536,9 @@ func LoadConfigWithEnv() (*Config, error) {
 	// Load system message overrides from YAML file
 	systemOverrides, err := LoadSystemMessageOverrides()
 	if err != nil {
-		log.Printf("⚠️  Warning: Failed to load system message overrides from system_overrides.yaml: %v", err)
+		cfg.logWarn("configuration", "warning", "", "Failed to load system message overrides from system_overrides.yaml", map[string]interface{}{
+			"error": err.Error(),
+		})
 		// Continue with empty system overrides instead of failing
 	} else {
 		cfg.SystemMessageOverrides = systemOverrides
@@ -490,7 +614,10 @@ func (c *Config) MapModelName(ctx context.Context, claudeModel string) string {
 	if mapped, exists := modelMap[claudeModel]; exists {
 		// Only log model mapping if it's not a small model (to avoid spam from disabled small model logging)
 		if !c.DisableSmallModelLogging || mapped != c.SmallModel {
-			log.Printf("🔄[%s] Model mapping: %s → %s", requestID, claudeModel, mapped)
+			c.logInfo("configuration", "request", requestID, "Model mapping applied", map[string]interface{}{
+				"from_model": claudeModel,
+				"to_model": mapped,
+			})
 		}
 		return mapped
 	}
@@ -516,7 +643,8 @@ func LoadToolDescriptions() (map[string]string, error) {
 	if err != nil {
 		if os.IsNotExist(err) {
 			// File doesn't exist - return empty map, no error
-			log.Printf("📝 tools_override.yaml not found, using original tool descriptions")
+			// No structured logging available during config loading phase
+			// This will be logged via main.go after obsLogger is available
 			return make(map[string]string), nil
 		}
 		return nil, fmt.Errorf("failed to open tools_override.yaml: %v", err)
@@ -533,9 +661,9 @@ func LoadToolDescriptions() (map[string]string, error) {
 		yamlData.ToolDescriptions = make(map[string]string)
 	}
 
-	log.Printf("📝 Loaded %d tool description overrides from tools_override.yaml", len(yamlData.ToolDescriptions))
-	for toolName := range yamlData.ToolDescriptions {
-		log.Printf("   - %s: custom description loaded", toolName)
+	// Tool descriptions will be logged by caller after obsLogger is available
+	for range yamlData.ToolDescriptions {
+		// Individual tool description details will be logged by caller
 	}
 
 	return yamlData.ToolDescriptions, nil
@@ -575,7 +703,8 @@ func LoadSystemMessageOverrides() (SystemMessageOverrides, error) {
 	if err != nil {
 		if os.IsNotExist(err) {
 			// File doesn't exist - return empty struct, no error
-			log.Printf("📝 system_overrides.yaml not found, using original system messages")
+			// No structured logging available during config loading phase
+			// This will be logged via main.go after obsLogger is available
 			return SystemMessageOverrides{}, nil
 		}
 		return SystemMessageOverrides{}, fmt.Errorf("failed to open system_overrides.yaml: %v", err)
@@ -589,11 +718,7 @@ func LoadSystemMessageOverrides() (SystemMessageOverrides, error) {
 	}
 
 	overrides := yamlData.SystemMessageOverrides
-	log.Printf("📝 Loaded system message overrides from system_overrides.yaml:")
-	log.Printf("   - Remove patterns: %d", len(overrides.RemovePatterns))
-	log.Printf("   - Replacements: %d", len(overrides.Replacements))
-	log.Printf("   - Prepend: %t", overrides.Prepend != "")
-	log.Printf("   - Append: %t", overrides.Append != "")
+	// System message override details will be logged by caller after obsLogger is available
 
 	return overrides, nil
 }
@@ -607,6 +732,7 @@ func ApplySystemMessageOverrides(originalMessage string, overrides SystemMessage
 	for _, pattern := range overrides.RemovePatterns {
 		re, err := regexp.Compile(pattern)
 		if err != nil {
+			// Pattern validation error - use fallback logging since this is runtime processing
 			log.Printf("⚠️  Warning: Invalid regex pattern '%s': %v", pattern, err)
 			continue
 		}
@@ -615,6 +741,7 @@ func ApplySystemMessageOverrides(originalMessage string, overrides SystemMessage
 		matches := re.FindAllString(message, -1)
 		if len(matches) > 0 {
 			for _, match := range matches {
+				// Match removal - use fallback logging for system message processing
 				log.Printf("🔍 removePattern detected, removed '%s' for pattern '%s'", match, pattern)
 			}
 			message = re.ReplaceAllString(message, "")
@@ -628,6 +755,7 @@ func ApplySystemMessageOverrides(originalMessage string, overrides SystemMessage
 			message = strings.ReplaceAll(message, replacement.Find, replacement.Replace)
 			// Count occurrences replaced
 			occurrences := strings.Count(oldMessage, replacement.Find)
+			// Replacement applied - use fallback logging for system message processing
 			log.Printf("🔄 replacement applied: '%s' → '%s' (%d occurrences)",
 				replacement.Find, replacement.Replace, occurrences)
 		}
@@ -636,10 +764,12 @@ func ApplySystemMessageOverrides(originalMessage string, overrides SystemMessage
 	// Apply prepend and append
 	if overrides.Prepend != "" {
 		message = overrides.Prepend + message
+		// Prepend applied - use fallback logging for system message processing
 		log.Printf("➕ prepend applied: '%s'", strings.TrimSpace(overrides.Prepend))
 	}
 	if overrides.Append != "" {
 		message = message + overrides.Append
+		// Append applied - use fallback logging for system message processing
 		log.Printf("➕ append applied: '%s'", strings.TrimSpace(overrides.Append))
 	}
 
@@ -746,7 +876,9 @@ func (c *Config) GetHealthyToolCorrectionEndpoint() string {
 
 	endpoint := c.HealthManager.SelectHealthyEndpoint(c.ToolCorrectionEndpoints, &c.toolCorrectionIndex)
 	if endpoint != "" {
-		log.Printf("🎯 Selected healthy tool correction endpoint: %s", endpoint)
+		c.logInfo("configuration", "request", "", "Selected healthy tool correction endpoint", map[string]interface{}{
+			"endpoint": endpoint,
+		})
 	}
 	return endpoint
 }
@@ -760,17 +892,26 @@ func (c *Config) MarkEndpointFailed(endpointType string) {
 	case "big_model":
 		if len(c.BigModelEndpoints) > 1 {
 			c.bigModelIndex = (c.bigModelIndex + 1) % len(c.BigModelEndpoints)
-			log.Printf("⚠️ Big model endpoint failed, switching to index %d", c.bigModelIndex)
+			c.logWarn("configuration", "warning", "", "Big model endpoint failed, switching to next", map[string]interface{}{
+				"new_index": c.bigModelIndex,
+				"total_endpoints": len(c.BigModelEndpoints),
+			})
 		}
 	case "small_model":
 		if len(c.SmallModelEndpoints) > 1 {
 			c.smallModelIndex = (c.smallModelIndex + 1) % len(c.SmallModelEndpoints)
-			log.Printf("⚠️ Small model endpoint failed, switching to index %d", c.smallModelIndex)
+			c.logWarn("configuration", "warning", "", "Small model endpoint failed, switching to next", map[string]interface{}{
+				"new_index": c.smallModelIndex,
+				"total_endpoints": len(c.SmallModelEndpoints),
+			})
 		}
 	case "tool_correction":
 		if len(c.ToolCorrectionEndpoints) > 1 {
 			c.toolCorrectionIndex = (c.toolCorrectionIndex + 1) % len(c.ToolCorrectionEndpoints)
-			log.Printf("⚠️ Tool correction endpoint failed, switching to index %d", c.toolCorrectionIndex)
+			c.logWarn("configuration", "warning", "", "Tool correction endpoint failed, switching to next", map[string]interface{}{
+				"new_index": c.toolCorrectionIndex,
+				"total_endpoints": len(c.ToolCorrectionEndpoints),
+			})
 		}
 	}
 }

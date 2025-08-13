@@ -1,7 +1,6 @@
 package circuitbreaker
 
 import (
-	"log"
 	"time"
 )
 
@@ -37,11 +36,22 @@ func (hm *HealthManager) RecordFailure(endpoint string) {
 		now := time.Now()
 		health.NextRetryTime = now.Add(backoff)
 
-		log.Printf("🚨 Circuit breaker opened for endpoint %s (failures: %d, retry in: %v)",
-			endpoint, health.FailureCount, backoff)
+		if hm.obsLogger != nil {
+			hm.obsLogger.Error("circuit_breaker", "error", "", "Circuit breaker opened for endpoint", map[string]interface{}{
+				"endpoint": endpoint,
+				"failure_count": health.FailureCount,
+				"backoff_duration": backoff.String(),
+				"next_retry_time": health.NextRetryTime.Format(time.RFC3339),
+			})
+		}
 	} else {
-		log.Printf("⚠️ Endpoint failure recorded: %s (failures: %d/%d)",
-			endpoint, health.FailureCount, hm.config.FailureThreshold)
+		if hm.obsLogger != nil {
+			hm.obsLogger.Warn("circuit_breaker", "warning", "", "Endpoint failure recorded", map[string]interface{}{
+				"endpoint": endpoint,
+				"failure_count": health.FailureCount,
+				"failure_threshold": hm.config.FailureThreshold,
+			})
+		}
 	}
 }
 
@@ -66,11 +76,21 @@ func (hm *HealthManager) RecordSuccess(endpoint string) {
 		health.CircuitOpen = false
 		health.FailureCount = 0
 		health.NextRetryTime = time.Time{}
-		log.Printf("✅ Circuit breaker closed for endpoint %s (recovered)", endpoint)
+		if hm.obsLogger != nil {
+			hm.obsLogger.Info("circuit_breaker", "health", "", "Circuit breaker closed for endpoint", map[string]interface{}{
+				"endpoint": endpoint,
+				"status": "recovered",
+			})
+		}
 	} else if health.FailureCount > 0 {
 		// Gradually reduce failure count on success
 		health.FailureCount = 0
-		log.Printf("✅ Endpoint recovered: %s (failure count reset)", endpoint)
+		if hm.obsLogger != nil {
+			hm.obsLogger.Info("circuit_breaker", "health", "", "Endpoint recovered", map[string]interface{}{
+				"endpoint": endpoint,
+				"status": "failure_count_reset",
+			})
+		}
 	}
 }
 
@@ -94,10 +114,20 @@ func (hm *HealthManager) SelectHealthyEndpoint(endpoints []string, currentIndex 
 		} else {
 			failureCount, circuitOpen, nextRetry, exists := hm.GetHealthDebug(endpoint)
 			if exists {
-				log.Printf("⚠️ Skipping unhealthy endpoint: %s (failures: %d, circuit: %v, retry: %v)", 
-					endpoint, failureCount, circuitOpen, nextRetry)
+				if hm.obsLogger != nil {
+					hm.obsLogger.Warn("circuit_breaker", "warning", "", "Skipping unhealthy endpoint", map[string]interface{}{
+						"endpoint": endpoint,
+						"failure_count": failureCount,
+						"circuit_open": circuitOpen,
+						"next_retry_time": nextRetry.Format(time.RFC3339),
+					})
+				}
 			} else {
-				log.Printf("⚠️ Skipping endpoint with no health info: %s", endpoint)
+				if hm.obsLogger != nil {
+					hm.obsLogger.Warn("circuit_breaker", "warning", "", "Skipping endpoint with no health info", map[string]interface{}{
+						"endpoint": endpoint,
+					})
+				}
 			}
 		}
 	}
@@ -105,6 +135,10 @@ func (hm *HealthManager) SelectHealthyEndpoint(endpoints []string, currentIndex 
 	// If no healthy endpoints found, return the next one anyway (last resort)
 	endpoint := endpoints[*currentIndex]
 	*currentIndex = (*currentIndex + 1) % len(endpoints)
-	log.Printf("⚠️ No healthy endpoints found, using fallback: %s", endpoint)
+	if hm.obsLogger != nil {
+		hm.obsLogger.Error("circuit_breaker", "error", "", "No healthy endpoints found, using fallback", map[string]interface{}{
+			"fallback_endpoint": endpoint,
+		})
+	}
 	return endpoint
 }

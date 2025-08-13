@@ -6,16 +6,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"strings"
 )
 
 // ProcessStreamingResponse handles streaming OpenAI responses properly
 // Reads all chunks until finish_reason != null (solving the core streaming issue)
-func ProcessStreamingResponse(ctx context.Context, resp *http.Response) (*types.OpenAIResponse, error) {
+func (h *Handler) ProcessStreamingResponse(ctx context.Context, resp *http.Response) (*types.OpenAIResponse, error) {
 	requestID := GetRequestID(ctx)
-	log.Printf("🌊[%s] Processing streaming response...", requestID)
+	if h.obsLogger != nil {
+		h.obsLogger.Info("proxy_core", "request", requestID, "Processing streaming response", map[string]interface{}{})
+	}
 
 	scanner := bufio.NewScanner(resp.Body)
 	// Increase buffer size to handle large streaming chunks (tool calls, long content)
@@ -42,7 +43,11 @@ func ProcessStreamingResponse(ctx context.Context, resp *http.Response) (*types.
 		// Parse chunk
 		var chunk types.OpenAIStreamChunk
 		if err := json.Unmarshal([]byte(jsonStr), &chunk); err != nil {
-			log.Printf("⚠️[%s] Failed to parse streaming chunk: %v", requestID, err)
+			if h.obsLogger != nil {
+				h.obsLogger.Warn("proxy_core", "warning", requestID, "Failed to parse streaming chunk", map[string]interface{}{
+					"error": err.Error(),
+				})
+			}
 			continue
 		}
 
@@ -51,24 +56,36 @@ func ProcessStreamingResponse(ctx context.Context, resp *http.Response) (*types.
 		// Check if this is the final chunk with finish_reason
 		if len(chunk.Choices) > 0 && chunk.Choices[0].FinishReason != nil {
 			finalChunk = &chunk
-			log.Printf("🏁[%s] Found final chunk with finish_reason: %s", requestID, *chunk.Choices[0].FinishReason)
+			if h.obsLogger != nil {
+				h.obsLogger.Info("proxy_core", "request", requestID, "Found final chunk with finish_reason", map[string]interface{}{
+					"finish_reason": *chunk.Choices[0].FinishReason,
+				})
+			}
 			break
 		}
 	}
 
 	if err := scanner.Err(); err != nil {
-		log.Printf("❌[%s] Streaming error: %v", requestID, err)
+		if h.obsLogger != nil {
+			h.obsLogger.Error("proxy_core", "error", requestID, "Streaming error", map[string]interface{}{
+				"error": err.Error(),
+			})
+		}
 		return nil, fmt.Errorf("error reading stream: %v", err)
 	}
 
-	log.Printf("📊[%s] Processed %d streaming chunks", requestID, len(chunks))
+	if h.obsLogger != nil {
+		h.obsLogger.Info("proxy_core", "request", requestID, "Processed streaming chunks", map[string]interface{}{
+			"chunk_count": len(chunks),
+		})
+	}
 
 	// Reconstruct complete response from chunks
-	return ReconstructResponseFromChunks(ctx, chunks, finalChunk)
+	return h.ReconstructResponseFromChunks(ctx, chunks, finalChunk)
 }
 
 // ReconstructResponseFromChunks builds a complete OpenAI response from streaming chunks
-func ReconstructResponseFromChunks(ctx context.Context, chunks []types.OpenAIStreamChunk, finalChunk *types.OpenAIStreamChunk) (*types.OpenAIResponse, error) {
+func (h *Handler) ReconstructResponseFromChunks(ctx context.Context, chunks []types.OpenAIStreamChunk, finalChunk *types.OpenAIStreamChunk) (*types.OpenAIResponse, error) {
 	if len(chunks) == 0 {
 		return nil, fmt.Errorf("no chunks received")
 	}
@@ -141,7 +158,11 @@ func ReconstructResponseFromChunks(ctx context.Context, chunks []types.OpenAIStr
 	requestID := GetRequestID(ctx)
 	if len(toolCalls) > 0 {
 		message.ToolCalls = toolCalls
-		log.Printf("🔧 [%s] Reconstructed %d tool calls", requestID, len(toolCalls))
+		if h.obsLogger != nil {
+			h.obsLogger.Info("proxy_core", "transformation", requestID, "Reconstructed tool calls", map[string]interface{}{
+				"tool_call_count": len(toolCalls),
+			})
+		}
 	}
 
 	// Set finish reason
@@ -161,8 +182,14 @@ func ReconstructResponseFromChunks(ctx context.Context, chunks []types.OpenAIStr
 	if finishReason != nil {
 		finishReasonStr = *finishReason
 	}
-	log.Printf("✅[%s] Reconstructed complete response: content_length=%d, tool_calls=%d, finish_reason=%s",
-		requestID, len(message.Content), len(toolCalls), finishReasonStr)
+	// Use structured logging for response reconstruction summary
+	if h.obsLogger != nil {
+		h.obsLogger.Info("proxy_core", "success", requestID, "Reconstructed complete response", map[string]interface{}{
+			"content_length": len(message.Content),
+			"tool_calls": len(toolCalls),
+			"finish_reason": finishReasonStr,
+		})
+	}
 
 	return response, nil
 }

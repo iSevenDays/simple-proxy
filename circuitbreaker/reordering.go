@@ -1,7 +1,6 @@
 package circuitbreaker
 
 import (
-	"log"
 	"time"
 )
 
@@ -77,10 +76,22 @@ func (hm *HealthManager) ReorderBySuccess(endpoints []string, endpointType strin
 
 	// Log reordering if changes occurred
 	if hasChanged {
-		log.Printf("🔄 Reordered %s endpoints by success rate:", endpointType)
-		for i, score := range scores {
-			log.Printf("   %d. %s (success rate: %.2f%%, healthy: %t)", 
-				i+1, score.url, score.successRate*100, score.isHealthy)
+		if hm.obsLogger != nil {
+			// Create endpoint details for logging
+			endpointDetails := make([]map[string]interface{}, len(scores))
+			for i, score := range scores {
+				endpointDetails[i] = map[string]interface{}{
+					"position": i + 1,
+					"endpoint": score.url,
+					"success_rate": score.successRate,
+					"is_healthy": score.isHealthy,
+				}
+			}
+			hm.obsLogger.Info("circuit_breaker", "health", "", "Reordered endpoints by success rate", map[string]interface{}{
+				"endpoint_type": endpointType,
+				"endpoint_details": endpointDetails,
+				"total_endpoints": len(scores),
+			})
 		}
 	}
 

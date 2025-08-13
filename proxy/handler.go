@@ -11,7 +11,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"strings"
@@ -25,10 +24,11 @@ type Handler struct {
 	loggerConfig       logger.LoggerConfig
 	conversationLogger *logger.ConversationLogger
 	loopDetector       *loop.LoopDetector
+	obsLogger          *logger.ObservabilityLogger
 }
 
 // NewHandler creates a new proxy handler
-func NewHandler(cfg *config.Config, conversationLogger *logger.ConversationLogger) *Handler {
+func NewHandler(cfg *config.Config, conversationLogger *logger.ConversationLogger, obsLogger *logger.ObservabilityLogger) *Handler {
 	return &Handler{
 		config: cfg,
 		correctionService: correction.NewService(
@@ -37,10 +37,12 @@ func NewHandler(cfg *config.Config, conversationLogger *logger.ConversationLogge
 			cfg.ToolCorrectionEnabled,
 			cfg.CorrectionModel,
 			cfg.DisableToolCorrectionLogging,
+			obsLogger,
 		),
 		loggerConfig:       logger.NewConfigAdapter(cfg),
 		conversationLogger: conversationLogger,
 		loopDetector:       loop.NewLoopDetector(),
+		obsLogger:          obsLogger,
 	}
 }
 
@@ -54,8 +56,10 @@ func (h *Handler) HandleAnthropicRequest(w http.ResponseWriter, r *http.Request)
 	// Read request body
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		// Early error - no context yet, use basic logging
-		log.Printf("❌ Failed to read request body: %v", err)
+		// Early error - no context yet
+		if h.obsLogger != nil {
+			h.obsLogger.Error(logger.ComponentProxy, logger.CategoryError, "", "Failed to read request body", map[string]interface{}{"error": err.Error()})
+		}
 		http.Error(w, "Failed to read request", http.StatusBadRequest)
 		return
 	}
@@ -64,10 +68,13 @@ func (h *Handler) HandleAnthropicRequest(w http.ResponseWriter, r *http.Request)
 	// Parse Anthropic request
 	var anthropicReq types.AnthropicRequest
 	if err := json.Unmarshal(body, &anthropicReq); err != nil {
-		// Early error - no context yet, use basic logging
-		log.Printf("⚠️ Invalid JSON in request: %v", err)
-		log.Printf("📋 Raw request body for debugging:")
-		log.Printf("%s", string(body))
+		// Early error - no context yet
+		if h.obsLogger != nil {
+			h.obsLogger.Error(logger.ComponentProxy, logger.CategoryError, "", "Invalid JSON in request", map[string]interface{}{
+				"error": err.Error(),
+				"raw_body": string(body),
+			})
+		}
 		http.Error(w, "Invalid request format", http.StatusBadRequest)
 		return
 	}
@@ -459,7 +466,7 @@ func (h *Handler) proxyToProviderEndpoint(ctx context.Context, req types.OpenAIR
 	// Get logger from context and use it for logging
 	proxyLogger := logger.FromContext(ctx, h.loggerConfig).WithModel(originalModel)
 	logger.LogProxyRequest(ctx, proxyLogger, endpoint, req.Stream)
-	//too much verbosity log.Printf("📤 [%s] Request JSON: %s", requestID, string(reqBody))
+	// Verbose logging can be added via obsLogger.Debug if needed
 
 	// Create HTTP client with custom connection timeout
 	connectionTimeout := time.Duration(h.config.DefaultConnectionTimeout) * time.Second
@@ -497,7 +504,7 @@ func (h *Handler) proxyToProviderEndpoint(ctx context.Context, req types.OpenAIR
 	// Handle streaming vs non-streaming responses
 	if req.Stream {
 		logger.LogStreamingResponse(ctx, proxyLogger)
-		result, err := ProcessStreamingResponse(ctx, resp)
+		result, err := h.ProcessStreamingResponse(ctx, resp)
 		if err != nil {
 			// Record endpoint failure for streaming errors (skip for big models)
 			if !h.isBigModelEndpoint(endpoint) {

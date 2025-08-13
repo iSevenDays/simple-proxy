@@ -41,6 +41,11 @@ type HealthManager struct {
 	config      Config
 	healthMap   map[string]*EndpointHealth
 	healthMutex sync.RWMutex
+	obsLogger   interface {
+		Info(component, category, requestID, message string, fields map[string]interface{})
+		Warn(component, category, requestID, message string, fields map[string]interface{})
+		Error(component, category, requestID, message string, fields map[string]interface{})
+	}
 }
 
 // NewHealthManager creates a new health manager
@@ -49,6 +54,15 @@ func NewHealthManager(config Config) *HealthManager {
 		config:    config,
 		healthMap: make(map[string]*EndpointHealth),
 	}
+}
+
+// SetObservabilityLogger sets the observability logger for structured logging
+func (hm *HealthManager) SetObservabilityLogger(obsLogger interface {
+	Info(component, category, requestID, message string, fields map[string]interface{})
+	Warn(component, category, requestID, message string, fields map[string]interface{})
+	Error(component, category, requestID, message string, fields map[string]interface{})
+}) {
+	hm.obsLogger = obsLogger
 }
 
 // InitializeEndpoints initializes health tracking for all endpoints

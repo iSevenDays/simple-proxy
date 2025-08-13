@@ -4,7 +4,7 @@ A Claude Code proxy that transforms Anthropic API requests to OpenAI-compatible 
 
 ## Overview
 
-The Simple Proxy acts as a translation layer between Claude Code (Anthropic API format) and OpenAI-compatible model providers. It provides comprehensive request/response transformation, tool customization, system message overrides, and intelligent model routing with sophisticated workflow-aware tool necessity detection.
+The Simple Proxy acts as a translation layer between Claude Code (Anthropic API format) and OpenAI-compatible model providers. It provides comprehensive request/response transformation, tool customization, system message overrides, intelligent model routing with sophisticated workflow-aware tool necessity detection, and **comprehensive observability via Grafana Loki integration**.
 
 ## Key Innovation: Dual-Layer ExitPlanMode Protection
 
@@ -44,6 +44,12 @@ This intelligent system recognizes that commands like "fix bug" or "debug error"
                     ┌──────────────────┐
                     │  Configuration   │
                     │  & Overrides     │
+                    └──────────────────┘
+                              │
+                              ▼
+                    ┌──────────────────┐
+                    │   Observability  │
+                    │ Loki + Grafana   │
                     └──────────────────┘
 ```
 
@@ -1208,3 +1214,163 @@ Anthropic: {name, description, input_schema}
 - **Environment Variables**: Secure credential storage
 - **YAML Validation**: Safe YAML parsing without code execution
 - **Access Control**: File-based configuration access
+
+## Observability Architecture
+
+### Overview
+
+The Simple Proxy includes comprehensive observability via **Grafana Loki integration** with structured JSON logging and real-time monitoring capabilities.
+
+### Observability Stack
+
+```
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│ Simple Proxy    │───▶│ Alloy Agent     │───▶│ Loki            │
+│ JSON Logging    │    │ Log Processing  │    │ Log Storage     │
+└─────────────────┘    └─────────────────┘    └─────────────────┘
+         │                       │                       │
+         ▼                       ▼                       ▼
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│ logger/         │    │ alloy-config    │    │ Grafana         │
+│ observability.go│    │ .alloy          │    │ Dashboards      │
+└─────────────────┘    └─────────────────┘    └─────────────────┘
+```
+
+### Structured Logging (`logger/observability.go`)
+
+**Key Features:**
+- **JSON Line Format**: Structured logs in JSONL format optimized for Loki
+- **Component-Based Categorization**: Matches Simple Proxy architecture components
+- **Request ID Correlation**: Full request tracing across components
+- **Efficient Labels**: Minimal labels for optimal Loki performance
+
+**Log Structure:**
+```json
+{
+  "timestamp": "2025-08-12T15:50:01.159793Z",
+  "level": "INFO",
+  "service": "simple-proxy", 
+  "component": "proxy_core",
+  "category": "request",
+  "request_id": "req_123",
+  "message": "Claude Code Proxy starting",
+  "fields": {
+    "port": "3456",
+    "tool_correction_enabled": true,
+    "big_model_endpoints": 1
+  }
+}
+```
+
+**Components Tracked:**
+- `proxy_core` - Main request processing
+- `circuit_breaker` - Endpoint health and failover
+- `hybrid_classifier` - Tool necessity decisions
+- `tool_correction` - Parameter corrections and validations
+- `exitplanmode_validation` - ExitPlanMode usage validation
+- `schema_correction` - Tool schema repairs
+- `endpoint_management` - Endpoint routing and health
+
+**Log Categories:**
+- `request` - Request lifecycle events
+- `error` - Error conditions and failures
+- `health` - Circuit breaker and endpoint health
+- `transformation` - Request/response transformations
+- `classification` - Tool necessity decisions
+- `blocked` - Blocked actions (ExitPlanMode misuse)
+
+### Alloy Agent Configuration
+
+**Dual Processing Pipeline:**
+1. **Legacy Text Logs**: Handles existing emoji-based log format
+2. **Structured JSON Logs**: Optimized processing for JSON entries
+
+**Label Extraction:**
+- `service="simple-proxy"` - Service identification
+- `component` - Architecture component
+- `category` - Event classification
+- `level` - Log severity (INFO/WARN/ERROR)
+- `request_id` - Request correlation
+
+**Structured Metadata**: JSON fields extracted as queryable metadata
+
+### Grafana Integration
+
+**Datasource Configuration:**
+- **Loki Connection**: http://loki:3100
+- **JSON Parsing**: Automatic field extraction
+- **Derived Fields**: Endpoint, tool_name, error extraction
+- **Request Correlation**: Click-through navigation by request_id
+
+**Key Queries:**
+```logql
+# All Simple Proxy logs
+{service="simple-proxy"}
+
+# Component-specific filtering
+{service="simple-proxy", component="circuit_breaker"}
+{service="simple-proxy", component="hybrid_classifier"}
+
+# Request tracing
+{service="simple-proxy", request_id="req_123"}
+
+# Error monitoring
+{service="simple-proxy", level="ERROR"}
+
+# Performance metrics
+rate({service="simple-proxy", category="request"}[5m])
+```
+
+### Deployment Architecture
+
+**Docker Compose Stack** (`observability/docker-compose.yml`):
+- **Loki**: Log aggregation and storage (port 3100)
+- **Alloy**: Log collection and processing (port 12345)
+- **Grafana**: Visualization and dashboards (port 3000)
+
+**Key Benefits:**
+- **Real-time Monitoring**: Live request and error tracking
+- **Request Tracing**: Follow requests across all components
+- **Component Health**: Circuit breaker state monitoring
+- **Performance Analysis**: Tool correction patterns and response times
+- **Debugging**: Structured error analysis with context
+
+### Observability Queries for Operations
+
+**System Health:**
+```logql
+# Circuit breaker events
+{service="simple-proxy", component="circuit_breaker"}
+
+# Tool correction frequency
+rate({service="simple-proxy", component="tool_correction"}[5m])
+
+# Error rates by component
+sum by (component) (rate({service="simple-proxy", level="ERROR"}[5m]))
+```
+
+**Request Analysis:**
+```logql
+# Request volume
+rate({service="simple-proxy", category="request"}[5m])
+
+# Tool necessity decisions
+{service="simple-proxy", component="hybrid_classifier"} |= "decision"
+
+# ExitPlanMode blocks
+{service="simple-proxy", category="blocked"}
+```
+
+### Current Status
+
+**✅ Working:**
+- Complete Loki stack deployment
+- Structured JSON logging implementation
+- Log ingestion and label extraction
+- Component-based filtering and queries
+- Request ID correlation
+
+**🔧 In Progress:**
+- JSON field parsing optimization for Grafana display
+- Advanced dashboard creation
+- Alerting configuration

@@ -722,7 +722,7 @@ func shouldSkipExitPlanModeLLM(ctx context.Context, userRequest string, cfg *con
 	}
 	
 	// Use the correction service's dedicated context analysis method
-	correctionService := correction.NewService(cfg, cfg.ToolCorrectionAPIKey, true, cfg.CorrectionModel, false)
+	correctionService := correction.NewService(cfg, cfg.ToolCorrectionAPIKey, true, cfg.CorrectionModel, false, nil)
 	
 	// Use the specialized AnalyzeRequestContext method
 	shouldFilter, err := correctionService.AnalyzeRequestContext(ctx, userRequest)
