@@ -82,7 +82,7 @@ func TestMultiEditFallbackSchema(t *testing.T) {
 
 // TestMultiEditValidation tests MultiEdit tool call validation
 func TestMultiEditValidation(t *testing.T) {
-	service := correction.NewService(NewMockConfigProvider("http://test"), "test-key", true, "test-model", false)
+	service := correction.NewService(NewMockConfigProvider("http://test"), "test-key", true, "test-model", false, nil)
 	ctx := context.WithValue(context.Background(), internal.RequestIDKey, "test-req")
 	
 	// Get fallback schema for MultiEdit
@@ -203,7 +203,7 @@ func TestMultiEditValidation(t *testing.T) {
 
 // TestMultiEditRuleBasedCorrection tests rule-based parameter corrections for MultiEdit
 func TestMultiEditRuleBasedCorrection(t *testing.T) {
-	service := correction.NewService(NewMockConfigProvider("http://test"), "test-key", true, "test-model", false)
+	service := correction.NewService(NewMockConfigProvider("http://test"), "test-key", true, "test-model", false, nil)
 	ctx := context.WithValue(context.Background(), internal.RequestIDKey, "test-req")
 	
 	tests := []struct {
@@ -337,7 +337,7 @@ func TestMultiEditRuleBasedCorrection(t *testing.T) {
 
 // TestMultiEditMalformedStructureCorrection tests correction of malformed MultiEdit calls like the original error
 func TestMultiEditMalformedStructureCorrection(t *testing.T) {
-	service := correction.NewService(NewMockConfigProvider("http://test"), "test-key", true, "test-model", false)
+	service := correction.NewService(NewMockConfigProvider("http://test"), "test-key", true, "test-model", false, nil)
 	ctx := context.WithValue(context.Background(), internal.RequestIDKey, "test-req")
 	
 	// Get fallback schema
@@ -416,7 +416,7 @@ func TestMultiEditMalformedStructureCorrection(t *testing.T) {
 
 // TestMultiEditStructuralCorrection tests correction of MultiEdit calls where file_path is incorrectly nested in edits
 func TestMultiEditStructuralCorrection(t *testing.T) {
-	service := correction.NewService(NewMockConfigProvider("http://test"), "test-key", true, "test-model", false)
+	service := correction.NewService(NewMockConfigProvider("http://test"), "test-key", true, "test-model", false, nil)
 	ctx := context.WithValue(context.Background(), internal.RequestIDKey, "test-req")
 	
 	// Get fallback schema

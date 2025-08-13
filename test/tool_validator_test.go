@@ -400,7 +400,7 @@ func TestSchemaRegistry_CorrectionServiceIntegration(t *testing.T) {
 func TestSchemaRegistry_BackwardCompatibilityInService(t *testing.T) {
 	// Create service with defaults (backward compatibility)
 	mockConfig2 := NewMockConfigProvider("http://test:8080")
-	service := correction.NewService(mockConfig2, "test-key", true, "test-model", false)
+	service := correction.NewService(mockConfig2, "test-key", true, "test-model", false, nil)
 	
 	ctx := context.WithValue(context.Background(), internal.RequestIDKey, "test-req")
 	

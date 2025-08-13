@@ -15,7 +15,7 @@ import (
 func TestExitPlanModeRealProblematicCase(t *testing.T) {
 	// Use real LLM endpoint from environment
 	cfg := NewMockConfigProvider()
-	service := correction.NewService(cfg, cfg.ToolCorrectionAPIKey, true, cfg.CorrectionModel, false)
+	service := correction.NewService(cfg, cfg.ToolCorrectionAPIKey, true, cfg.CorrectionModel, false, nil)
 	ctx := internal.WithRequestID(context.Background(), "real-case-test")
 
 	// The exact problematic plan content from the logs
@@ -60,7 +60,7 @@ The changes enable the system to use the optimized binary upload approach throug
 func TestExitPlanModeUpdatedPatterns(t *testing.T) {
 	// Use real LLM endpoint from environment
 	cfg := NewMockConfigProvider()
-	service := correction.NewService(cfg, cfg.ToolCorrectionAPIKey, true, cfg.CorrectionModel, false)
+	service := correction.NewService(cfg, cfg.ToolCorrectionAPIKey, true, cfg.CorrectionModel, false, nil)
 	ctx := internal.WithRequestID(context.Background(), "pattern-test")
 
 	tests := []struct {

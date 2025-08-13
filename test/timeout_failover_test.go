@@ -93,7 +93,7 @@ func TestTimeoutDetectionAndFailover(t *testing.T) {
 
 		// Setup config to track calls
 		config := NewTimeoutTestConfig([]string{timeoutServer.URL, successServer.URL})
-		service := correction.NewService(config, "test-key", true, "test-model", false)
+		service := correction.NewService(config, "test-key", true, "test-model", false, nil)
 
 		// Test with generous timeout to allow for failover
 		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
@@ -151,7 +151,7 @@ func TestTimeoutDetectionAndFailover(t *testing.T) {
 		defer timeoutServer2.Close()
 
 		config := NewTimeoutTestConfig([]string{timeoutServer1.URL, timeoutServer2.URL})
-		service := correction.NewService(config, "test-key", true, "test-model", false)
+		service := correction.NewService(config, "test-key", true, "test-model", false, nil)
 
 		// Test should fail after trying all endpoints
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -201,7 +201,7 @@ func TestTimeoutDetectionAndFailover(t *testing.T) {
 		defer successServer.Close()
 
 		config := NewTimeoutTestConfig([]string{badEndpoint1, badEndpoint2, successServer.URL})
-		service := correction.NewService(config, "test-key", true, "test-model", false)
+		service := correction.NewService(config, "test-key", true, "test-model", false, nil)
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -265,7 +265,7 @@ func TestDetectToolNecessityFailover(t *testing.T) {
 		defer fallbackEndpoint.Close()
 
 		config := NewTimeoutTestConfig([]string{problemEndpoint.URL, fallbackEndpoint.URL})
-		service := correction.NewService(config, "test-key", true, "test-model", false)
+		service := correction.NewService(config, "test-key", true, "test-model", false, nil)
 
 		// Test with an ambiguous user message that requires LLM analysis for failover behavior
 		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)

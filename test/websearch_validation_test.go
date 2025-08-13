@@ -15,7 +15,7 @@ import (
 // works correctly even when WebSearch is not in the availableTools list
 // This addresses the infinite retry loop issue where WebSearch was marked as "Unknown tool"
 func TestWebSearchValidationWithFallbackSchema(t *testing.T) {
-	service := correction.NewService(NewMockConfigProvider("http://test.com"), "test-key", true, "test-model", false)
+	service := correction.NewService(NewMockConfigProvider("http://test.com"), "test-key", true, "test-model", false, nil)
 	ctx := internal.WithRequestID(context.Background(), "websearch_test")
 
 	// Simulate the real scenario: availableTools only contains tools from the original request
@@ -145,7 +145,7 @@ func TestWebSearchSchemaRestoration(t *testing.T) {
 }
 
 func TestWebSearchCorrectionWithFallbackSchema(t *testing.T) {
-	service := correction.NewService(NewMockConfigProvider("http://test.com"), "test-key", true, "test-model", false)
+	service := correction.NewService(NewMockConfigProvider("http://test.com"), "test-key", true, "test-model", false, nil)
 	ctx := internal.WithRequestID(context.Background(), "websearch_correction_test")
 
 	// Same scenario: availableTools doesn't include WebSearch

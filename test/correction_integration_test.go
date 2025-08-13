@@ -15,7 +15,7 @@ import (
 // Following SPARC: End-to-end integration testing for slash command correction
 func TestSlashCommandIntegration(t *testing.T) {
 	mockConfig := NewMockConfigProvider("http://test.com")
-	service := correction.NewService(mockConfig, "test-key", true, "test-model", false)
+	service := correction.NewService(mockConfig, "test-key", true, "test-model", false, nil)
 
 	// Define Task tool schema
 	taskToolSchema := types.Tool{

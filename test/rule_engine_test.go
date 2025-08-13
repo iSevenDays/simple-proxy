@@ -90,7 +90,7 @@ func TestRuleEngineExtensibility(t *testing.T) {
 	
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			decision := classifier.DetectToolNecessity(tt.messages)
+			decision := classifier.DetectToolNecessity(tt.messages, nil, "")
 			
 			assert.Equal(t, tt.expected, decision.RequireTools, 
 				"RequireTools should match expected for: %s", tt.description)
@@ -115,7 +115,7 @@ func TestRuleEnginePriority(t *testing.T) {
 		{Role: "user", Content: "document the new features in README.md"},
 	}
 	
-	decision := classifier.DetectToolNecessity(messages)
+	decision := classifier.DetectToolNecessity(messages, nil, "")
 	
 	// The custom documentation rule should fire (priority 95) before 
 	// the default ImplementationVerbWithFileRule (priority 90)
@@ -151,7 +151,7 @@ func TestRuleEnginePerformance(t *testing.T) {
 			messages := []types.OpenAIMessage{msg}
 			
 			// Should complete very quickly even with multiple rules
-			decision := classifier.DetectToolNecessity(messages)
+			decision := classifier.DetectToolNecessity(messages, nil, "")
 			
 			require.NotNil(t, decision)
 			assert.NotEmpty(t, decision.Reason)

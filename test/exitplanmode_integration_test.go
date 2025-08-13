@@ -16,7 +16,7 @@ import (
 func TestExitPlanModeRealWorldScenario(t *testing.T) {
 	// Use real LLM endpoint from environment
 	cfg := NewMockConfigProvider()
-	service := correction.NewService(cfg, cfg.ToolCorrectionAPIKey, true, cfg.CorrectionModel, false)
+	service := correction.NewService(cfg, cfg.ToolCorrectionAPIKey, true, cfg.CorrectionModel, false, nil)
 	ctx := internal.WithRequestID(context.Background(), "real-world-test")
 
 	// Recreate the exact scenario from the user's log: 58 messages with implementation work
@@ -256,7 +256,7 @@ func buildRealWorldConversationScenario() []types.OpenAIMessage {
 func TestExitPlanModeValidConversationFlow(t *testing.T) {
 	// Use real LLM endpoint from environment
 	cfg := NewMockConfigProvider()
-	service := correction.NewService(cfg, cfg.ToolCorrectionAPIKey, true, cfg.CorrectionModel, false)
+	service := correction.NewService(cfg, cfg.ToolCorrectionAPIKey, true, cfg.CorrectionModel, false, nil)
 	ctx := internal.WithRequestID(context.Background(), "valid-flow-test")
 
 	// Valid conversation: User asks for help, assistant analyzes, then plans
@@ -317,7 +317,7 @@ func TestExitPlanModeValidConversationFlow(t *testing.T) {
 func TestExitPlanModePerformanceWithLargeConversations(t *testing.T) {
 	// Use real LLM endpoint from environment
 	cfg := NewMockConfigProvider()
-	service := correction.NewService(cfg, cfg.ToolCorrectionAPIKey, true, cfg.CorrectionModel, false)
+	service := correction.NewService(cfg, cfg.ToolCorrectionAPIKey, true, cfg.CorrectionModel, false, nil)
 	ctx := internal.WithRequestID(context.Background(), "performance-test")
 
 	// Create a very large conversation (100+ messages)

@@ -179,8 +179,12 @@ func TestStreamingResponseReconstruction(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// Create a handler to call the method
+			cfg := getTestConfig()
+			handler := proxy.NewHandler(cfg, nil, nil)
+			
 			ctx := internal.WithRequestID(context.Background(), "stream_reconstruction_test")
-		result, err := proxy.ReconstructResponseFromChunks(ctx, tt.chunks, tt.finalChunk)
+			result, err := handler.ReconstructResponseFromChunks(ctx, tt.chunks, tt.finalChunk)
 			require.NoError(t, err)
 
 			// Verify basic response structure
@@ -232,8 +236,12 @@ data: [DONE]
 		Body: &mockReadCloser{strings.NewReader(streamData)},
 	}
 
+	// Create a handler to call the method
+	cfg := getTestConfig()
+	handler := proxy.NewHandler(cfg, nil, nil)
+	
 	ctx := internal.WithRequestID(context.Background(), "stream_processing_test")
-	result, err := proxy.ProcessStreamingResponse(ctx, resp)
+	result, err := handler.ProcessStreamingResponse(ctx, resp)
 	require.NoError(t, err)
 
 	assert.Equal(t, "stream_123", result.ID)
@@ -249,8 +257,12 @@ data: [DONE]
 
 // TestEmptyStreamingResponse tests edge case handling
 func TestEmptyStreamingResponse(t *testing.T) {
+	// Create a handler to call the method
+	cfg := getTestConfig()
+	handler := proxy.NewHandler(cfg, nil, nil)
+	
 	ctx := internal.WithRequestID(context.Background(), "empty_stream_test")
-	_, err := proxy.ReconstructResponseFromChunks(ctx, []types.OpenAIStreamChunk{}, nil)
+	_, err := handler.ReconstructResponseFromChunks(ctx, []types.OpenAIStreamChunk{}, nil)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "no chunks received")
 }

@@ -15,7 +15,7 @@ import (
 func TestDetectToolNecessityContextAware(t *testing.T) {
 	// Use real LLM endpoint from environment  
 	cfg := NewMockConfigProvider()
-	service := correction.NewService(cfg, cfg.ToolCorrectionAPIKey, true, cfg.CorrectionModel, false)
+	service := correction.NewService(cfg, cfg.ToolCorrectionAPIKey, true, cfg.CorrectionModel, false, nil)
 	ctx := internal.WithRequestID(context.Background(), "detect-tool-necessity-test")
 
 	// Available tools for testing
@@ -553,7 +553,7 @@ func TestDetectToolNecessityContextAware(t *testing.T) {
 // TestDetectToolNecessityPromptGeneration tests the enhanced prompt building with conversation context
 func TestDetectToolNecessityPromptGeneration(t *testing.T) {
 	cfg := NewMockConfigProvider()
-	service := correction.NewService(cfg, cfg.ToolCorrectionAPIKey, true, cfg.CorrectionModel, false)
+	service := correction.NewService(cfg, cfg.ToolCorrectionAPIKey, true, cfg.CorrectionModel, false, nil)
 
 	messages := []types.OpenAIMessage{
 		{Role: "user", Content: "gather knowledge about project and update CLAUDE.md"},
@@ -596,7 +596,7 @@ func TestDetectToolNecessityErrorHandling(t *testing.T) {
 	// Test with invalid config to trigger error handling
 	cfg := NewMockConfigProvider()
 	cfg.ToolCorrectionEndpoints = []string{"http://invalid-endpoint-that-does-not-exist"}
-	service := correction.NewService(cfg, "invalid-key", true, cfg.CorrectionModel, false)
+	service := correction.NewService(cfg, "invalid-key", true, cfg.CorrectionModel, false, nil)
 	ctx := internal.WithRequestID(context.Background(), "error-handling-test")
 
 	messages := []types.OpenAIMessage{
@@ -617,7 +617,7 @@ func TestDetectToolNecessityErrorHandling(t *testing.T) {
 func TestDetectToolNecessityDisabled(t *testing.T) {
 	cfg := NewMockConfigProvider()
 	// Create service with tool correction disabled
-	service := correction.NewService(cfg, cfg.ToolCorrectionAPIKey, false, cfg.CorrectionModel, false)
+	service := correction.NewService(cfg, cfg.ToolCorrectionAPIKey, false, cfg.CorrectionModel, false, nil)
 	ctx := internal.WithRequestID(context.Background(), "disabled-test")
 
 	messages := []types.OpenAIMessage{

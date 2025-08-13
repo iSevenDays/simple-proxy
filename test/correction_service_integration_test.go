@@ -107,6 +107,7 @@ func TestCorrectionService_BackwardCompatibility(t *testing.T) {
 		true,
 		"test-model",
 		false,
+		nil,
 	)
 	
 	ctx := context.WithValue(context.Background(), internal.RequestIDKey, "test-req")

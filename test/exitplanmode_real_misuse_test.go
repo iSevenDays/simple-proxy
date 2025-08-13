@@ -16,7 +16,7 @@ import (
 func TestExitPlanModeRealWorldMisuse(t *testing.T) {
 	// Use real LLM endpoint from environment
 	cfg := NewMockConfigProvider()
-	service := correction.NewService(cfg, cfg.ToolCorrectionAPIKey, true, cfg.CorrectionModel, false)
+	service := correction.NewService(cfg, cfg.ToolCorrectionAPIKey, true, cfg.CorrectionModel, false, nil)
 	ctx := internal.WithRequestID(context.Background(), "req_2000")
 
 	// Recreate the exact scenario from the log where ExitPlanMode was incorrectly used
@@ -199,7 +199,7 @@ func mustGenerateID(index int) string {
 func TestExitPlanModeAnalysisPattern(t *testing.T) {
 	// Use real LLM endpoint from environment
 	cfg := NewMockConfigProvider()
-	service := correction.NewService(cfg, cfg.ToolCorrectionAPIKey, true, cfg.CorrectionModel, false)
+	service := correction.NewService(cfg, cfg.ToolCorrectionAPIKey, true, cfg.CorrectionModel, false, nil)
 	ctx := internal.WithRequestID(context.Background(), "test-analysis-pattern")
 
 	analysisPatternTests := []struct {
@@ -274,7 +274,7 @@ func TestExitPlanModeAnalysisPattern(t *testing.T) {
 func TestExitPlanModeResearchContextPattern(t *testing.T) {
 	// Use real LLM endpoint from environment
 	cfg := NewMockConfigProvider()
-	service := correction.NewService(cfg, cfg.ToolCorrectionAPIKey, true, cfg.CorrectionModel, false)
+	service := correction.NewService(cfg, cfg.ToolCorrectionAPIKey, true, cfg.CorrectionModel, false, nil)
 	ctx := internal.WithRequestID(context.Background(), "test-research-context")
 
 	researchContextTests := []struct {

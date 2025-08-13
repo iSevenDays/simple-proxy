@@ -74,7 +74,7 @@ func TestImmediateFailoverWithinRequest(t *testing.T) {
 			}),
 		}
 
-		handler := proxy.NewHandler(cfg, nil)
+		handler := proxy.NewHandler(cfg, nil, nil)
 
 		// Make a small model request (claude-3-5-haiku-20241022 maps to qwen2.5-coder:latest)
 		reqBody := `{
@@ -133,7 +133,7 @@ func TestImmediateFailoverWithinRequest(t *testing.T) {
 			}),
 		}
 
-		handler := proxy.NewHandler(cfg, nil)
+		handler := proxy.NewHandler(cfg, nil, nil)
 
 		// Make a big model request (claude-3-5-sonnet-20241022 maps to kimi-k2)
 		reqBody := `{

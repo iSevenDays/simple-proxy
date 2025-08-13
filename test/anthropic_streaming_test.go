@@ -86,7 +86,7 @@ func TestAnthropicStreamingFormat(t *testing.T) {
 			cfg.ToolCorrectionAPIKey = "test-key"
 
 			// Create handler
-			handler := proxy.NewHandler(cfg, nil)
+			handler := proxy.NewHandler(cfg, nil, nil)
 
 			// Create test request
 			reqBody := map[string]interface{}{
@@ -169,7 +169,7 @@ func TestAnthropicStreamingEventStructure(t *testing.T) {
 	cfg.BigModelAPIKey = "test-key"
 
 	// Create handler
-	handler := proxy.NewHandler(cfg, nil)
+	handler := proxy.NewHandler(cfg, nil, nil)
 
 	// Create test request
 	reqBody := map[string]interface{}{
@@ -260,7 +260,7 @@ func TestAnthropicStreamingWithTools(t *testing.T) {
 	cfg.BigModelAPIKey = "test-key"
 
 	// Create handler
-	handler := proxy.NewHandler(cfg, nil)
+	handler := proxy.NewHandler(cfg, nil, nil)
 
 	// Create test request with tools
 	reqBody := map[string]interface{}{

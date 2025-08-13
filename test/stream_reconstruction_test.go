@@ -78,8 +78,12 @@ func TestStreamingToolCallReconstruction_PartialChunks(t *testing.T) {
 		},
 	}
 
+	// Create a handler to call the method
+	cfg := getTestConfig()
+	handler := proxy.NewHandler(cfg, nil, nil)
+	
 	ctx := internal.WithRequestID(context.Background(), "stream_test")
-	response, err := proxy.ReconstructResponseFromChunks(ctx, chunks, finalChunk)
+	response, err := handler.ReconstructResponseFromChunks(ctx, chunks, finalChunk)
 
 	if err != nil {
 		t.Fatalf("Expected successful reconstruction, got error: %v", err)

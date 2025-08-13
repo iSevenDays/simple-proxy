@@ -1,6 +1,7 @@
 package correction
 
 import (
+	"claude-proxy/logger"
 	"claude-proxy/types"
 	"regexp"
 	"strings"
@@ -78,21 +79,42 @@ func NewHybridClassifier() *HybridClassifier {
 	}
 }
 
-// DetectToolNecessity implements the two-stage hybrid approach
-func (h *HybridClassifier) DetectToolNecessity(messages []types.OpenAIMessage) RuleDecision {
+// DetectToolNecessity implements the core two-stage hybrid logic with observability
+// NOTE: This is a component-level method. For production use, call Service.DetectToolNecessity
+// which provides the complete API including context handling and LLM fallback
+func (h *HybridClassifier) DetectToolNecessity(messages []types.OpenAIMessage, logFunc func(component, category, requestID, message string, fields map[string]interface{}), requestID string) RuleDecision {
+	// Handle nil logger gracefully
+	if logFunc == nil {
+		logFunc = func(component, category, requestID, message string, fields map[string]interface{}) {
+			// No-op when logger is nil
+		}
+	}
+	
 	// Stage A: Extract verb-artifact pairs
-	pairs := h.extractActionPairs(messages)
+	pairs := h.extractActionPairs(messages, logFunc, requestID)
 
 	// Stage B: Apply rule-based evaluation using the rule engine
-	decision := h.ruleEngine.Evaluate(pairs, messages)
+	decision := h.ruleEngine.Evaluate(pairs, messages, logFunc, requestID)
 
 	return decision
 }
 
-// extractActionPairs analyzes conversation messages to extract verb-artifact pairs
+// extractActionPairs analyzes conversation messages to extract verb-artifact pairs with observability by default
 // Stage A of the two-stage hybrid classifier
-func (h *HybridClassifier) extractActionPairs(messages []types.OpenAIMessage) []ActionPair {
+func (h *HybridClassifier) extractActionPairs(messages []types.OpenAIMessage, logFunc func(component, category, requestID, message string, fields map[string]interface{}), requestID string) []ActionPair {
+	// Handle nil logger for backward compatibility
+	if logFunc == nil {
+		logFunc = func(component, category, requestID, message string, fields map[string]interface{}) {
+			// No-op when logger is nil
+		}
+	}
+
 	var pairs []ActionPair
+
+	logFunc(logger.ComponentHybridClassifier, logger.CategoryClassification, requestID, "Stage A: Starting action pair extraction", map[string]interface{}{
+		"stage":           "A_extract_pairs",
+		"messages_count":  len(messages),
+	})
 
 	// Find the most recent user message - this is the primary intent
 	var mostRecentUserMsg *types.OpenAIMessage
@@ -106,8 +128,18 @@ func (h *HybridClassifier) extractActionPairs(messages []types.OpenAIMessage) []
 	}
 
 	if mostRecentUserMsg == nil {
+		logFunc(logger.ComponentHybridClassifier, logger.CategoryClassification, requestID, "Stage A: No user messages found", map[string]interface{}{
+			"stage": "A_extract_pairs",
+			"pairs_extracted": 0,
+		})
 		return pairs // No user messages found
 	}
+
+	logFunc(logger.ComponentHybridClassifier, logger.CategoryClassification, requestID, "Stage A: Found most recent user message", map[string]interface{}{
+		"stage":             "A_extract_pairs",
+		"user_message_idx":  mostRecentUserIdx,
+		"user_prompt":       mostRecentUserMsg.Content,
+	})
 
 	// PHASE 1: Analyze the most recent user message (primary intent)
 	content := strings.ToLower(mostRecentUserMsg.Content)
@@ -115,15 +147,36 @@ func (h *HybridClassifier) extractActionPairs(messages []types.OpenAIMessage) []
 	
 	// CONTEXTUAL NEGATION DETECTION - Check for patterns that negate implementation intent
 	if h.detectContextualNegation(content) {
+		logFunc(logger.ComponentHybridClassifier, logger.CategoryClassification, requestID, "Stage A: Contextual negation detected", map[string]interface{}{
+			"stage":                "A_extract_pairs",
+			"negation_detected":    true,
+			"content_snippet":      content[:min(100, len(content))],
+		})
+		
 		// Add a special marker to indicate this is explanation/hypothetical only
 		pairs = append(pairs, ActionPair{
 			Verb:      "explanation_only",
 			Artifact:  "contextual_negation",
 			Confident: true,
 		})
+		
+		logFunc(logger.ComponentHybridClassifier, logger.CategoryClassification, requestID, "Stage A: Action pairs extracted", map[string]interface{}{
+			"stage":           "A_extract_pairs",
+			"pairs_count":     len(pairs),
+			"pairs":           pairs,
+			"negation_result": true,
+		})
+		
 		return pairs
+	} else {
+		logFunc(logger.ComponentHybridClassifier, logger.CategoryClassification, requestID, "Stage A: No contextual negation detected", map[string]interface{}{
+			"stage":             "A_extract_pairs",
+			"negation_detected": false,
+		})
 	}
 
+	// Extract verb-artifact pairs from current message
+	currentPairs := []ActionPair{}
 	for i, word := range words {
 		cleanWord := strings.Trim(word, ".,!?:;\"'()[]")
 
@@ -132,22 +185,47 @@ func (h *HybridClassifier) extractActionPairs(messages []types.OpenAIMessage) []
 			artifact := h.findNearbyArtifact(words, i, mostRecentUserMsg.Content)
 			confident := artifact != "" || h.strongVerbs[cleanWord]
 
-			pairs = append(pairs, ActionPair{
+			pair := ActionPair{
 				Verb:      cleanWord,
 				Artifact:  artifact,
 				Confident: confident,
+			}
+			pairs = append(pairs, pair)
+			currentPairs = append(currentPairs, pair)
+			
+			logFunc(logger.ComponentHybridClassifier, logger.CategoryClassification, requestID, "Stage A: Implementation verb detected", map[string]interface{}{
+				"stage":      "A_extract_pairs",
+				"verb":       cleanWord,
+				"artifact":   artifact,
+				"confident":  confident,
+				"is_strong":  h.strongVerbs[cleanWord],
 			})
 		}
 
 		// Check if this is a research verb
 		if h.researchVerbs[cleanWord] && !h.implVerbs[cleanWord] {
-			pairs = append(pairs, ActionPair{
+			pair := ActionPair{
 				Verb:      cleanWord,
 				Artifact:  "",
 				Confident: true,
+			}
+			pairs = append(pairs, pair)
+			currentPairs = append(currentPairs, pair)
+			
+			logFunc(logger.ComponentHybridClassifier, logger.CategoryClassification, requestID, "Stage A: Research verb detected", map[string]interface{}{
+				"stage":     "A_extract_pairs",
+				"verb":      cleanWord,
+				"artifact":  "",
+				"confident": true,
 			})
 		}
 	}
+
+	logFunc(logger.ComponentHybridClassifier, logger.CategoryClassification, requestID, "Stage A: Current message analysis complete", map[string]interface{}{
+		"stage":                   "A_extract_pairs",
+		"current_pairs_count":     len(currentPairs),
+		"current_pairs":           currentPairs,
+	})
 
 	// PHASE 2: Check previous user messages for compound request context
 	// Only if we don't have strong implementation verbs in the current message
@@ -159,15 +237,26 @@ func (h *HybridClassifier) extractActionPairs(messages []types.OpenAIMessage) []
 		}
 	}
 
+	logFunc(logger.ComponentHybridClassifier, logger.CategoryClassification, requestID, "Stage A: Strong implementation check", map[string]interface{}{
+		"stage":                          "A_extract_pairs",
+		"has_strong_current_impl":        hasStrongCurrentImplementation,
+	})
+
 	// If current message doesn't have strong implementation signals, check if this might be 
 	// a compound request continuation that needs historical context
 	if !hasStrongCurrentImplementation {
 		// First, check if implementation has been completed recently
-		implementationCompleted := h.detectRecentImplementationCompletion(messages, mostRecentUserIdx)
+		implementationCompleted := h.detectRecentImplementationCompletion(messages, mostRecentUserIdx, logFunc, requestID)
 		
 		// Only check historical context if implementation hasn't been completed
 		if !implementationCompleted {
+			logFunc(logger.ComponentHybridClassifier, logger.CategoryClassification, requestID, "Stage A: Checking historical context", map[string]interface{}{
+				"stage":                      "A_extract_pairs",
+				"implementation_completed":   false,
+			})
+			
 			// Look back through previous user messages for compound request context
+			historicalPairs := []ActionPair{}
 			for i := mostRecentUserIdx - 1; i >= 0; i-- {
 				if messages[i].Role == "user" {
 					historicalContent := strings.ToLower(messages[i].Content)
@@ -182,10 +271,20 @@ func (h *HybridClassifier) extractActionPairs(messages []types.OpenAIMessage) []
 							confident := artifact != "" || h.strongVerbs[cleanWord]
 
 							// Mark as historical context (less confident)
-							pairs = append(pairs, ActionPair{
+							pair := ActionPair{
 								Verb:      cleanWord,
 								Artifact:  artifact,
 								Confident: confident && len(pairs) == 0, // Only confident if no current pairs
+							}
+							pairs = append(pairs, pair)
+							historicalPairs = append(historicalPairs, pair)
+							
+							logFunc(logger.ComponentHybridClassifier, logger.CategoryClassification, requestID, "Stage A: Historical verb detected", map[string]interface{}{
+								"stage":              "A_extract_pairs",
+								"verb":               cleanWord,
+								"artifact":           artifact,
+								"confident":          pair.Confident,
+								"historical_msg_idx": i,
 							})
 						}
 					}
@@ -194,6 +293,17 @@ func (h *HybridClassifier) extractActionPairs(messages []types.OpenAIMessage) []
 					break
 				}
 			}
+			
+			logFunc(logger.ComponentHybridClassifier, logger.CategoryClassification, requestID, "Stage A: Historical context analysis complete", map[string]interface{}{
+				"stage":                  "A_extract_pairs",
+				"historical_pairs_count": len(historicalPairs),
+				"historical_pairs":       historicalPairs,
+			})
+		} else {
+			logFunc(logger.ComponentHybridClassifier, logger.CategoryClassification, requestID, "Stage A: Implementation recently completed, skipping historical context", map[string]interface{}{
+				"stage":                    "A_extract_pairs",
+				"implementation_completed": true,
+			})
 		}
 	}
 
@@ -203,29 +313,58 @@ func (h *HybridClassifier) extractActionPairs(messages []types.OpenAIMessage) []
 		startIdx = len(messages) - 6
 	}
 
-	for _, msg := range messages[startIdx:] {
+	researchPairs := []ActionPair{}
+	for msgIdx, msg := range messages[startIdx:] {
 		if msg.Role == "assistant" && len(msg.ToolCalls) > 0 {
 			for _, toolCall := range msg.ToolCalls {
 				toolName := strings.ToLower(toolCall.Function.Name)
 				if toolName == "task" || toolName == "read" || toolName == "grep" || toolName == "glob" {
-					pairs = append(pairs, ActionPair{
+					pair := ActionPair{
 						Verb:      "research_done",
 						Artifact:  toolName,
 						Confident: true,
+					}
+					pairs = append(pairs, pair)
+					researchPairs = append(researchPairs, pair)
+					
+					logFunc(logger.ComponentHybridClassifier, logger.CategoryClassification, requestID, "Stage A: Research tool detected", map[string]interface{}{
+						"stage":              "A_extract_pairs",
+						"tool_name":          toolName,
+						"assistant_msg_idx":  startIdx + msgIdx,
 					})
 				}
 			}
 		}
 	}
 
+	logFunc(logger.ComponentHybridClassifier, logger.CategoryClassification, requestID, "Stage A: Research context analysis complete", map[string]interface{}{
+		"stage":                "A_extract_pairs",
+		"research_pairs_count": len(researchPairs),
+		"research_pairs":       researchPairs,
+	})
+
+	logFunc(logger.ComponentHybridClassifier, logger.CategoryClassification, requestID, "Stage A: Action pair extraction complete", map[string]interface{}{
+		"stage":         "A_extract_pairs",
+		"total_pairs":   len(pairs),
+		"pairs":         pairs,
+	})
+
 	return pairs
 }
 
-// detectRecentImplementationCompletion checks if implementation work was recently completed
-// by looking for assistant messages indicating completion after tool usage
-func (h *HybridClassifier) detectRecentImplementationCompletion(messages []types.OpenAIMessage, mostRecentUserIdx int) bool {
+
+// detectRecentImplementationCompletion checks if implementation work was recently completed with observability by default
+func (h *HybridClassifier) detectRecentImplementationCompletion(messages []types.OpenAIMessage, mostRecentUserIdx int, logFunc func(component, category, requestID, message string, fields map[string]interface{}), requestID string) bool {
+	logFunc(logger.ComponentHybridClassifier, logger.CategoryClassification, requestID, "Stage A: Checking recent implementation completion", map[string]interface{}{
+		"stage":               "A_extract_pairs",
+		"most_recent_user_idx": mostRecentUserIdx,
+	})
+	
 	// Look at messages between the most recent user message and the previous user message
 	if mostRecentUserIdx < 1 {
+		logFunc(logger.ComponentHybridClassifier, logger.CategoryClassification, requestID, "Stage A: No previous context for completion check", map[string]interface{}{
+			"stage": "A_extract_pairs",
+		})
 		return false // No previous context
 	}
 	
@@ -239,8 +378,17 @@ func (h *HybridClassifier) detectRecentImplementationCompletion(messages []types
 	}
 	
 	if prevUserIdx == -1 {
+		logFunc(logger.ComponentHybridClassifier, logger.CategoryClassification, requestID, "Stage A: No previous user message found", map[string]interface{}{
+			"stage": "A_extract_pairs",
+		})
 		return false // No previous user message
 	}
+	
+	logFunc(logger.ComponentHybridClassifier, logger.CategoryClassification, requestID, "Stage A: Analyzing completion indicators", map[string]interface{}{
+		"stage":         "A_extract_pairs",
+		"prev_user_idx": prevUserIdx,
+		"check_range":   []int{prevUserIdx + 1, mostRecentUserIdx},
+	})
 	
 	// Check assistant messages between previous user message and current user message
 	// for completion indicators
@@ -257,11 +405,20 @@ func (h *HybridClassifier) detectRecentImplementationCompletion(messages []types
 			}
 			
 			completionCount := 0
+			foundPhrases := []string{}
 			for _, phrase := range completionPhrases {
 				if strings.Contains(content, phrase) {
 					completionCount++
+					foundPhrases = append(foundPhrases, phrase)
 				}
 			}
+			
+			logFunc(logger.ComponentHybridClassifier, logger.CategoryClassification, requestID, "Stage A: Completion phrases analysis", map[string]interface{}{
+				"stage":             "A_extract_pairs",
+				"assistant_msg_idx": i,
+				"completion_count":  completionCount,
+				"found_phrases":     foundPhrases,
+			})
 			
 			// If we see multiple completion indicators in a single message,
 			// and there were tool calls in this conversation, it's likely completion
@@ -269,6 +426,11 @@ func (h *HybridClassifier) detectRecentImplementationCompletion(messages []types
 				// Also check that there were actual tool calls in this sequence
 				for j := prevUserIdx + 1; j < mostRecentUserIdx; j++ {
 					if messages[j].Role == "assistant" && len(messages[j].ToolCalls) > 0 {
+						logFunc(logger.ComponentHybridClassifier, logger.CategoryClassification, requestID, "Stage A: Implementation completion detected", map[string]interface{}{
+							"stage":            "A_extract_pairs",
+							"completion_count": completionCount,
+							"tool_calls_found": true,
+						})
 						return true // Implementation was completed
 					}
 				}
@@ -276,8 +438,21 @@ func (h *HybridClassifier) detectRecentImplementationCompletion(messages []types
 		}
 	}
 	
+	logFunc(logger.ComponentHybridClassifier, logger.CategoryClassification, requestID, "Stage A: No recent implementation completion found", map[string]interface{}{
+		"stage": "A_extract_pairs",
+	})
+	
 	return false
 }
+
+// min helper function
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 
 // AddCustomRule allows adding custom rules to the classifier
 func (h *HybridClassifier) AddCustomRule(rule Rule) {

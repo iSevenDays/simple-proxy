@@ -77,7 +77,7 @@ func TestSendCorrectionRequestRetryLogic(t *testing.T) {
 			timeoutServer.URL,
 			successServer.URL,
 		})
-		service := correction.NewService(config, "test-key", true, "test-model", false)
+		service := correction.NewService(config, "test-key", true, "test-model", false, nil)
 
 		// Test that it eventually succeeds after timeout failover
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -115,7 +115,7 @@ func TestSendCorrectionRequestRetryLogic(t *testing.T) {
 			failServer1.URL,
 			failServer2.URL,
 		})
-		service := correction.NewService(config, "test-key", true, "test-model", false)
+		service := correction.NewService(config, "test-key", true, "test-model", false, nil)
 
 		// Test should gracefully fallback when all endpoints fail
 		ctx := context.Background()
@@ -142,7 +142,7 @@ func TestSendCorrectionRequestRetryLogic(t *testing.T) {
 			"http://127.0.0.1:99999", // Non-existent port
 			"http://httpbin.org/status/200", // This might work in some environments
 		})
-		service := correction.NewService(config, "test-key", true, "test-model", false)
+		service := correction.NewService(config, "test-key", true, "test-model", false, nil)
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -167,7 +167,7 @@ func TestSendCorrectionRequestRetryLogic(t *testing.T) {
 	// Test 4: Empty endpoint list
 	t.Run("EmptyEndpointList", func(t *testing.T) {
 		config := NewMockConfigProviderWithRetry([]string{})
-		service := correction.NewService(config, "test-key", true, "test-model", false)
+		service := correction.NewService(config, "test-key", true, "test-model", false, nil)
 
 		ctx := context.Background()
 		necessary, err := service.DetectToolNecessity(ctx, []types.OpenAIMessage{
@@ -216,7 +216,7 @@ func TestCorrectToolCallsRetry(t *testing.T) {
 		defer server.Close()
 
 		config := NewMockConfigProviderWithRetry([]string{server.URL})
-		service := correction.NewService(config, "test-key", true, "test-model", false)
+		service := correction.NewService(config, "test-key", true, "test-model", false, nil)
 
 		// Create invalid tool call that needs correction
 		toolCalls := []types.Content{
@@ -288,7 +288,7 @@ func TestRetryLogging(t *testing.T) {
 		defer server.Close()
 
 		config := NewMockConfigProviderWithRetry([]string{server.URL, server.URL, server.URL})
-		service := correction.NewService(config, "test-key", true, "test-model", false) // Logging enabled
+		service := correction.NewService(config, "test-key", true, "test-model", false, nil) // Logging enabled
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()

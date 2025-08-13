@@ -117,7 +117,7 @@ func TestHybridClassifierExtractActionPairs(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Call the method through reflection or use a test-exposed method
 			// For now, we'll test the full DetectToolNecessity and verify behavior
-			decision := classifier.DetectToolNecessity(tt.messages)
+			decision := classifier.DetectToolNecessity(tt.messages, nil, "")
 			
 			t.Logf("Test case '%s': Decision=%+v - %s", 
 				tt.name, decision, tt.description)
@@ -235,7 +235,7 @@ func TestHybridClassifierApplyRules(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			decision := classifier.DetectToolNecessity(tt.messages)
+			decision := classifier.DetectToolNecessity(tt.messages, nil, "")
 			
 			assert.Equal(t, tt.expectedDecision, decision.RequireTools, 
 				"RequireTools should match expected for: %s", tt.description)
@@ -269,7 +269,7 @@ func TestHybridClassifierExactFailingScenario(t *testing.T) {
 		{Role: "user", Content: "Please continue with updating CLAUDE.md based on the research."},
 	}
 
-	decision := classifier.DetectToolNecessity(messages)
+	decision := classifier.DetectToolNecessity(messages, nil, "")
 
 	// This should now pass with the hybrid classifier
 	assert.True(t, decision.RequireTools, 
@@ -331,7 +331,7 @@ func TestHybridClassifierFilePatternDetection(t *testing.T) {
 				{Role: "user", Content: tt.content},
 			}
 			
-			decision := classifier.DetectToolNecessity(messages)
+			decision := classifier.DetectToolNecessity(messages, nil, "")
 			
 			if tt.shouldDetectFile {
 				// If we expect file detection, it should either be confident YES 
@@ -388,7 +388,7 @@ func TestHybridClassifierEdgeCases(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Should not panic or error
 			require.NotPanics(t, func() {
-				decision := classifier.DetectToolNecessity(tt.messages)
+				decision := classifier.DetectToolNecessity(tt.messages, nil, "")
 				require.NotNil(t, decision)
 				t.Logf("Test case '%s': Decision=%+v - %s", 
 					tt.name, decision, tt.description)
@@ -413,7 +413,7 @@ func TestHybridClassifierPerformance(t *testing.T) {
 			messages := []types.OpenAIMessage{msg}
 			
 			// Should complete very quickly (rules-based)
-			decision := classifier.DetectToolNecessity(messages)
+			decision := classifier.DetectToolNecessity(messages, nil, "")
 			
 			// For Rule 1 and Rule 5, should be confident
 			// Rule 4 may be less confident but still deterministic

@@ -14,7 +14,7 @@ import (
 // TestRuleBasedParameterCorrections tests that common parameter name issues
 // are fixed instantly without LLM calls for better performance
 func TestRuleBasedParameterCorrections(t *testing.T) {
-	service := correction.NewService(NewMockConfigProvider("http://test.com"), "test-key", true, "test-model", false)
+	service := correction.NewService(NewMockConfigProvider("http://test.com"), "test-key", true, "test-model", false, nil)
 	ctx := internal.WithRequestID(context.Background(), "rule_based_test")
 
 	// Available tools for validation (used in integration tests)
@@ -275,7 +275,7 @@ func TestRuleBasedParameterCorrections(t *testing.T) {
 
 // TestRuleBasedCorrectionIntegration tests rule-based corrections in the full correction pipeline
 func TestRuleBasedCorrectionIntegration(t *testing.T) {
-	service := correction.NewService(NewMockConfigProvider("http://test.com"), "test-key", true, "test-model", false)
+	service := correction.NewService(NewMockConfigProvider("http://test.com"), "test-key", true, "test-model", false, nil)
 	ctx := internal.WithRequestID(context.Background(), "rule_integration_test")
 
 	// Available tools for validation
@@ -331,7 +331,7 @@ func TestRuleBasedCorrectionPerformance(t *testing.T) {
 	// We can't easily mock the LLM call in this test, but we can verify the behavior
 	// by checking that corrections happen instantly and produce valid results
 	
-	service := correction.NewService(NewMockConfigProvider("http://invalid-endpoint"), "invalid-key", true, "test-model", false)
+	service := correction.NewService(NewMockConfigProvider("http://invalid-endpoint"), "invalid-key", true, "test-model", false, nil)
 	ctx := internal.WithRequestID(context.Background(), "performance_test")
 
 	availableTools := []types.Tool{

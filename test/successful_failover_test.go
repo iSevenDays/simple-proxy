@@ -63,7 +63,7 @@ func TestSuccessfulFailoverScenarios(t *testing.T) {
 		// Simple research requests should be handled instantly without HTTP calls
 		
 		config := NewSuccessFailoverConfig([]string{"http://unused:8080"})
-		service := correction.NewService(config, "test-key", true, "test-model", false)
+		service := correction.NewService(config, "test-key", true, "test-model", false, nil)
 
 		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 		defer cancel()
@@ -124,7 +124,7 @@ func TestSuccessfulFailoverScenarios(t *testing.T) {
 		defer secondServer.Close()
 
 		config := NewSuccessFailoverConfig([]string{firstServer.URL, secondServer.URL})
-		service := correction.NewService(config, "test-key", true, "test-model", false)
+		service := correction.NewService(config, "test-key", true, "test-model", false, nil)
 
 		// Create tool call that needs correction
 		toolCalls := []types.Content{
@@ -218,7 +218,7 @@ func TestSuccessfulFailoverScenarios(t *testing.T) {
 		defer secondServer.Close()
 
 		config := NewSuccessFailoverConfig([]string{firstServer.URL, secondServer.URL})
-		service := correction.NewService(config, "test-key", true, "test-model", false)
+		service := correction.NewService(config, "test-key", true, "test-model", false, nil)
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -319,7 +319,7 @@ func TestSuccessfulFailoverScenarios(t *testing.T) {
 			}),
 		}
 
-		handler := proxy.NewHandler(cfg, nil)
+		handler := proxy.NewHandler(cfg, nil, nil)
 		reqBody := `{"model":"claude-3-5-haiku-20241022","max_tokens":100,"messages":[{"role":"user","content":"Hello"}]}`
 
 		// First request - should fail and open circuit
@@ -384,7 +384,7 @@ func TestSuccessfulFailoverScenarios(t *testing.T) {
 		defer successServer.Close()
 
 		config := NewSuccessFailoverConfig([]string{successServer.URL, successServer.URL})
-		service := correction.NewService(config, "test-key", true, "test-model", false)
+		service := correction.NewService(config, "test-key", true, "test-model", false, nil)
 
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -441,7 +441,7 @@ func TestFailoverLogMessages(t *testing.T) {
 
 		config := NewSuccessFailoverConfig([]string{failServer.URL, successServer.URL})
 		// Enable logging to capture messages
-		service := correction.NewService(config, "test-key", true, "test-model", false)
+		service := correction.NewService(config, "test-key", true, "test-model", false, nil)
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -486,7 +486,7 @@ func TestEdgeCasesInFailover(t *testing.T) {
 		defer goodServer.Close()
 
 		config := NewSuccessFailoverConfig([]string{emptyServer.URL, goodServer.URL})
-		service := correction.NewService(config, "test-key", true, "test-model", false)
+		service := correction.NewService(config, "test-key", true, "test-model", false, nil)
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -524,7 +524,7 @@ func TestEdgeCasesInFailover(t *testing.T) {
 		defer validServer.Close()
 
 		config := NewSuccessFailoverConfig([]string{invalidServer.URL, validServer.URL})
-		service := correction.NewService(config, "test-key", true, "test-model", false)
+		service := correction.NewService(config, "test-key", true, "test-model", false, nil)
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()

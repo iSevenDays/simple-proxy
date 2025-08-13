@@ -26,7 +26,7 @@ func mustMarshalJSON(v interface{}) string {
 func TestExitPlanModeValidation(t *testing.T) {
 	// Use real LLM endpoint from environment
 	cfg := NewMockConfigProvider()
-	service := correction.NewService(cfg, cfg.ToolCorrectionAPIKey, true, cfg.CorrectionModel, false)
+	service := correction.NewService(cfg, cfg.ToolCorrectionAPIKey, true, cfg.CorrectionModel, false, nil)
 	ctx := internal.WithRequestID(context.Background(), "test-request-001")
 
 	tests := []struct {
@@ -258,7 +258,7 @@ func buildMessagesWithImplementationWork() []types.OpenAIMessage {
 func TestExitPlanModeContentAnalysis(t *testing.T) {
 	// Use real LLM endpoint from environment
 	cfg := NewMockConfigProvider()
-	service := correction.NewService(cfg, cfg.ToolCorrectionAPIKey, true, cfg.CorrectionModel, false)
+	service := correction.NewService(cfg, cfg.ToolCorrectionAPIKey, true, cfg.CorrectionModel, false, nil)
 	ctx := internal.WithRequestID(context.Background(), "test-request-002")
 
 	completionIndicatorTests := []struct {
@@ -345,7 +345,7 @@ func TestExitPlanModeContentAnalysis(t *testing.T) {
 func TestExitPlanModeImplementationPatterns(t *testing.T) {
 	// Use real LLM endpoint from environment
 	cfg := NewMockConfigProvider()
-	service := correction.NewService(cfg, cfg.ToolCorrectionAPIKey, true, cfg.CorrectionModel, false)
+	service := correction.NewService(cfg, cfg.ToolCorrectionAPIKey, true, cfg.CorrectionModel, false, nil)
 	ctx := internal.WithRequestID(context.Background(), "test-request-003")
 
 	implementationPatternTests := []struct {
@@ -465,7 +465,7 @@ func buildMessagesWithToolCalls(toolNames []string) []types.OpenAIMessage {
 func TestExitPlanModeEdgeCases(t *testing.T) {
 	// Use real LLM endpoint from environment
 	cfg := NewMockConfigProvider()
-	service := correction.NewService(cfg, cfg.ToolCorrectionAPIKey, true, cfg.CorrectionModel, false)
+	service := correction.NewService(cfg, cfg.ToolCorrectionAPIKey, true, cfg.CorrectionModel, false, nil)
 	ctx := internal.WithRequestID(context.Background(), "test-request-004")
 
 	edgeCaseTests := []struct {
@@ -549,7 +549,7 @@ func TestExitPlanModeEdgeCases(t *testing.T) {
 func TestExitPlanModeLLMValidation(t *testing.T) {
 	// Use real LLM endpoint from environment
 	cfg := NewMockConfigProvider()
-	service := correction.NewService(cfg, cfg.ToolCorrectionAPIKey, true, cfg.CorrectionModel, false)
+	service := correction.NewService(cfg, cfg.ToolCorrectionAPIKey, true, cfg.CorrectionModel, false, nil)
 	ctx := internal.WithRequestID(context.Background(), "test-llm-validation")
 
 	tests := []struct {
@@ -614,7 +614,7 @@ func TestExitPlanModeLLMValidation(t *testing.T) {
 func TestDetectToolNecessityIssue(t *testing.T) {
 	// Use real LLM endpoint from environment
 	cfg := NewMockConfigProvider()
-	service := correction.NewService(cfg, cfg.ToolCorrectionAPIKey, true, cfg.CorrectionModel, false)
+	service := correction.NewService(cfg, cfg.ToolCorrectionAPIKey, true, cfg.CorrectionModel, false, nil)
 	ctx := internal.WithRequestID(context.Background(), "test-tool-necessity")
 
 	tests := []struct {
@@ -804,7 +804,7 @@ func TestDetectToolNecessityIssue(t *testing.T) {
 func TestClaudeCodeUIAnalysisScenario(t *testing.T) {
 	// Use real LLM endpoint from environment
 	cfg := NewMockConfigProvider()
-	service := correction.NewService(cfg, cfg.ToolCorrectionAPIKey, true, cfg.CorrectionModel, false)
+	service := correction.NewService(cfg, cfg.ToolCorrectionAPIKey, true, cfg.CorrectionModel, false, nil)
 	ctx := internal.WithRequestID(context.Background(), "test-claude-ui-scenario")
 
 	// Test cases based on the Claude Code UI log provided by the user

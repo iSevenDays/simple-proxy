@@ -1,0 +1,192 @@
+// Grafana Alloy configuration for Simple Proxy log collection
+
+// Log discovery - watch for Simple Proxy JSON logs (structured logs)  
+local.file_match "simple_proxy_json_logs" {
+    path_targets = [{
+        __path__ = "/var/log/simple-proxy/*.jsonl",
+        service  = "simple-proxy", 
+        job      = "simple-proxy-structured",
+        log_type = "json",
+    }]
+}
+
+// JSON log scraping with structured formatting
+loki.source.file "simple_proxy_json" {
+    targets      = local.file_match.simple_proxy_json_logs.targets
+    forward_to   = [loki.process.json_parser.receiver]
+    tail_from_end = true  // Start from end of file, prevents stuck offset issues
+}
+
+// Enhanced JSON log processing pipeline for logrus-based logs
+loki.process "json_parser" {
+    forward_to = [loki.write.loki_endpoint.receiver]
+
+    // Parse logrus JSON log entry - all fields are at top level
+    stage.json {
+        expressions = {
+            timestamp  = "timestamp",
+            level     = "level", 
+            component = "component",
+            category  = "category",
+            request_id = "request_id",
+            message   = "message",
+            service   = "service",
+            // Core application fields
+            endpoint = "endpoint",
+            tool_name = "tool_name",
+            error = "error",
+            port = "port",
+            model = "model",
+            tokens = "tokens",
+            success_rate = "success_rate",
+            failure_count = "failure_count",
+            response_time_ms = "response_time_ms",
+            decision = "decision",
+            reason = "reason",
+            confident = "confident",
+            verb = "verb",
+            artifact = "artifact",
+            original_param = "original_param",
+            corrected_param = "corrected_param",
+            retry_count = "retry_count",
+            user_agent = "user_agent",
+            big_model_endpoints = "big_model_endpoints",
+            small_model_endpoints = "small_model_endpoints",
+            correction_endpoints = "correction_endpoints",
+            tool_correction_enabled = "tool_correction_enabled",
+            // Hybrid classifier observability fields
+            stage = "stage",
+            pairs = "pairs",
+            total_pairs = "total_pairs",
+            pairs_count = "pairs_count",
+            current_pairs = "current_pairs",
+            current_pairs_count = "current_pairs_count",
+            historical_pairs = "historical_pairs",
+            historical_pairs_count = "historical_pairs_count",
+            research_pairs = "research_pairs",
+            research_pairs_count = "research_pairs_count",
+            pairs_input = "pairs_input",
+            rules_count = "rules_count",
+            rule_name = "rule_name",
+            rule_priority = "rule_priority",
+            rule_index = "rule_index",
+            matched = "matched",
+            final_rule = "final_rule",
+            final_decision = "final_decision",
+            final_confident = "final_confident",
+            final_reason = "final_reason",
+            user_prompt = "user_prompt",
+            user_message_idx = "user_message_idx",
+            messages_count = "messages_count",
+            pairs_extracted = "pairs_extracted",
+            negation_detected = "negation_detected",
+            content_snippet = "content_snippet",
+            negation_result = "negation_result",
+            is_strong = "is_strong",
+            has_strong_current_impl = "has_strong_current_impl",
+            implementation_completed = "implementation_completed",
+            tool_name_detected = "tool_name_detected",
+            assistant_msg_idx = "assistant_msg_idx",
+            historical_msg_idx = "historical_msg_idx",
+            most_recent_user_idx = "most_recent_user_idx",
+            prev_user_idx = "prev_user_idx",
+            check_range = "check_range",
+            completion_count = "completion_count",
+            found_phrases = "found_phrases",
+            tool_calls_found = "tool_calls_found",
+            // LLM fallback fields (Stage C)
+            model_name = "model_name",
+            max_tokens = "max_tokens",
+            temperature = "temperature",
+            system_message = "system_message",
+            choices_count = "choices_count",
+            response_id = "response_id",
+            raw_content = "raw_content",
+            normalized_content = "normalized_content",
+            starts_with_yes = "starts_with_yes",
+            decision_logic = "decision_logic",
+            analysis_result = "analysis_result",
+            raw_response = "raw_response",
+            prompt_length = "prompt_length",
+            full_prompt = "full_prompt",
+            fallback_decision = "fallback_decision",
+            // Additional fields for comprehensive parsing
+            api_key_masked = "api_key_masked",
+            enabled = "enabled",
+            description = "description",
+            new_index = "new_index", 
+            total_endpoints = "total_endpoints",
+            fallback_endpoint = "fallback_endpoint",
+            endpoint_count = "endpoint_count",
+            endpoints = "endpoints",
+            skip_tools = "skip_tools",
+            log_level = "log_level",
+            invalid_level = "invalid_level",
+            default_level = "default_level",
+            timeout_seconds = "timeout_seconds",
+            from_model = "from_model",
+            to_model = "to_model",
+            chunk_count = "chunk_count",
+            finish_reason = "finish_reason",
+            tool_call_count = "tool_call_count",
+            content_length = "content_length",
+            tool_calls = "tool_calls",
+            circuit_open = "circuit_open",
+            next_retry_time = "next_retry_time",
+            status = "status",
+            backoff_duration = "backoff_duration",
+            failure_threshold = "failure_threshold",
+            endpoint_details = "endpoint_details",
+            endpoint_type = "endpoint_type",
+        }
+    }
+
+    // Set timestamp from JSON
+    stage.timestamp {
+        source = "timestamp"
+        format = "RFC3339"
+    }
+
+    // Format the log entry to show structured information instead of raw JSON
+    stage.template {
+        source = "structured_log"
+        template = `{{ .message }}{{ if .request_id }} | request_id={{ .request_id }}{{ end }}{{ if .component }} | component={{ .component }}{{ end }}{{ if .category }} | category={{ .category }}{{ end }}{{ if .stage }} | stage={{ .stage }}{{ end }}{{ if .rule_name }} | rule={{ .rule_name }}{{ end }}{{ if .matched }} | matched={{ .matched }}{{ end }}{{ if .final_decision }} | final_decision={{ .final_decision }}{{ end }}{{ if .final_confident }} | confident={{ .final_confident }}{{ end }}{{ if .pairs_count }} | pairs={{ .pairs_count }}{{ end }}{{ if .total_pairs }} | total_pairs={{ .total_pairs }}{{ end }}{{ if .rules_count }} | rules={{ .rules_count }}{{ end }}{{ if .user_prompt }} | prompt={{ .user_prompt }}{{ end }}{{ if .negation_detected }} | negation={{ .negation_detected }}{{ end }}{{ if .is_strong }} | strong={{ .is_strong }}{{ end }}{{ if .analysis_result }} | analysis={{ .analysis_result }}{{ end }}{{ if .endpoint }} | endpoint={{ .endpoint }}{{ end }}{{ if .tool_name }} | tool={{ .tool_name }}{{ end }}{{ if .error }} | error={{ .error }}{{ end }}{{ if .model }} | model={{ .model }}{{ end }}{{ if .decision }} | decision={{ .decision }}{{ end }}{{ if .reason }} | reason={{ .reason }}{{ end }}{{ if .failure_count }} | failures={{ .failure_count }}{{ end }}{{ if .success_rate }} | success_rate={{ .success_rate }}{{ end }}{{ if .response_time_ms }} | response_time={{ .response_time_ms }}ms{{ end }}{{ if .tokens }} | tokens={{ .tokens }}{{ end }}{{ if .port }} | port={{ .port }}{{ end }}{{ if .enabled }} | enabled={{ .enabled }}{{ end }}{{ if .chunk_count }} | chunks={{ .chunk_count }}{{ end }}{{ if .tool_call_count }} | tool_calls={{ .tool_call_count }}{{ end }}{{ if .content_length }} | content_length={{ .content_length }}{{ end }}{{ if .finish_reason }} | finish_reason={{ .finish_reason }}{{ end }}{{ if .circuit_open }} | circuit_open={{ .circuit_open }}{{ end }}{{ if .status }} | status={{ .status }}{{ end }}{{ if .endpoint_type }} | endpoint_type={{ .endpoint_type }}{{ end }}`
+    }
+
+    // Replace the log line with our structured format
+    stage.output {
+        source = "structured_log"
+    }
+
+    // Set labels for efficient Loki querying (minimal for performance)
+    stage.labels {
+        values = {
+            level      = "level",
+            service    = "service",
+            component  = "component", 
+            category   = "category",
+        }
+    }
+
+    // Only add request_id as label if it exists (to avoid empty labels)
+    stage.labels {
+        values = {
+            request_id = "request_id",
+        }
+    }
+
+    // Add hybrid classifier specific labels for better filtering
+    stage.labels {
+        values = {
+            stage = "stage",
+            rule_name = "rule_name",
+        }
+    }
+}
+
+// Output to Loki
+loki.write "loki_endpoint" {
+    endpoint {
+        url = "http://loki:3100/loki/api/v1/push"
+    }
+}

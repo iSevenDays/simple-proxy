@@ -15,7 +15,7 @@ func TestToolValidator_IntegrationWithCorrectionService(t *testing.T) {
 	validator := types.NewStandardToolValidator()
 	
 	// Create correction service (using existing constructor)
-	service := correction.NewService(NewMockConfigProvider("http://test"), "test-key", true, "test-model", false)
+	service := correction.NewService(NewMockConfigProvider("http://test"), "test-key", true, "test-model", false, nil)
 	
 	// Create context with request ID
 	ctx := context.WithValue(context.Background(), internal.RequestIDKey, "test-req")

@@ -99,7 +99,7 @@ func TestToolCallValidation(t *testing.T) {
 		},
 	}
 
-	service := correction.NewService(NewMockConfigProvider("http://test"), "test-key", true, "test-model", false)
+	service := correction.NewService(NewMockConfigProvider("http://test"), "test-key", true, "test-model", false, nil)
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -113,7 +113,7 @@ func TestToolCallValidation(t *testing.T) {
 
 // TestToolCorrectionFlow tests the correction workflow (without actual HTTP calls)
 func TestToolCorrectionFlow(t *testing.T) {
-	service := correction.NewService(NewMockConfigProvider("http://test"), "test-key", true, "test-model", false)
+	service := correction.NewService(NewMockConfigProvider("http://test"), "test-key", true, "test-model", false, nil)
 
 	writeToolSchema := types.Tool{
 		Name:        "Write",
@@ -166,7 +166,7 @@ func TestToolCorrectionFlow(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Test with disabled correction (should return original)
-			disabledService := correction.NewService(NewMockConfigProvider("http://test"), "test-key", false, "test-model", false)
+			disabledService := correction.NewService(NewMockConfigProvider("http://test"), "test-key", false, "test-model", false, nil)
 			ctx := internal.WithRequestID(context.Background(), "correction_flow_test")
 			result, err := disabledService.CorrectToolCalls(ctx, tt.inputCalls, []types.Tool{writeToolSchema})
 			require.NoError(t, err)
@@ -185,7 +185,7 @@ func TestToolCorrectionFlow(t *testing.T) {
 
 // TestCorrectionPromptGeneration tests prompt building logic
 func TestCorrectionPromptGeneration(t *testing.T) {
-	service := correction.NewService(NewMockConfigProvider("http://test"), "test-key", true, "test-model", false)
+	service := correction.NewService(NewMockConfigProvider("http://test"), "test-key", true, "test-model", false, nil)
 
 	toolCall := types.Content{
 		Type: "tool_use",
@@ -290,7 +290,7 @@ Common fixes needed:
 
 // TestTwoStageCorrection tests the new two-stage correction system
 func TestTwoStageCorrection(t *testing.T) {
-	service := correction.NewService(NewMockConfigProvider("http://test"), "test-key", true, "test-model", false)
+	service := correction.NewService(NewMockConfigProvider("http://test"), "test-key", true, "test-model", false, nil)
 
 	// Define Read tool schema (common Claude Code tool)
 	readToolSchema := types.Tool{
@@ -397,7 +397,7 @@ func TestTwoStageCorrection(t *testing.T) {
 
 // TestSmartToolChoice tests the smart tool choice detection system
 func TestSmartToolChoice(t *testing.T) {
-	service := correction.NewService(NewMockConfigProvider("http://test"), "test-key", true, "test-model", false)
+	service := correction.NewService(NewMockConfigProvider("http://test"), "test-key", true, "test-model", false, nil)
 
 	readToolSchema := types.Tool{
 		Name:        "Read",
@@ -596,7 +596,7 @@ func TestSlashCommandDetection(t *testing.T) {
 // TestSlashCommandToTaskConversion tests converting slash commands to Task tool calls
 // Following SPARC: Comprehensive test coverage for transformation logic
 func TestSlashCommandToTaskConversion(t *testing.T) {
-	service := correction.NewService(NewMockConfigProvider("http://test.com"), "test-key", true, "test-model", true)
+	service := correction.NewService(NewMockConfigProvider("http://test.com"), "test-key", true, "test-model", true, nil)
 
 	// Define Task tool schema for testing
 	taskToolSchema := types.Tool{
@@ -700,7 +700,7 @@ func TestSlashCommandToTaskConversion(t *testing.T) {
 // TestSlashCommandParameterPreservation tests that existing parameters are preserved during conversion
 // Following SPARC: Ensure data integrity during transformation
 func TestSlashCommandParameterPreservation(t *testing.T) {
-	service := correction.NewService(NewMockConfigProvider("http://test.com"), "test-key", true, "test-model", true)
+	service := correction.NewService(NewMockConfigProvider("http://test.com"), "test-key", true, "test-model", true, nil)
 
 	taskToolSchema := types.Tool{
 		Name:        "Task",
@@ -793,7 +793,7 @@ func TestSlashCommandParameterPreservation(t *testing.T) {
 // TestSlashCommandEdgeCases tests edge cases for slash command correction
 // Following SPARC: Comprehensive edge case coverage for robust implementation
 func TestSlashCommandEdgeCases(t *testing.T) {
-	service := correction.NewService(NewMockConfigProvider("http://test.com"), "test-key", true, "test-model", true)
+	service := correction.NewService(NewMockConfigProvider("http://test.com"), "test-key", true, "test-model", true, nil)
 
 	tests := []struct {
 		name           string
@@ -873,7 +873,7 @@ func TestSlashCommandEdgeCases(t *testing.T) {
 
 // TestTodoWriteCorrection tests the comprehensive TodoWrite correction system
 func TestTodoWriteCorrection(t *testing.T) {
-	service := correction.NewService(NewMockConfigProvider("http://test"), "test-key", true, "test-model", false)
+	service := correction.NewService(NewMockConfigProvider("http://test"), "test-key", true, "test-model", false, nil)
 
 	// Define TodoWrite tool schema
 	todoWriteSchema := types.Tool{
@@ -1114,7 +1114,7 @@ func TestTodoWriteCorrection(t *testing.T) {
 
 // TestTodoWriteValidation tests TodoWrite validation logic
 func TestTodoWriteValidation(t *testing.T) {
-	service := correction.NewService(NewMockConfigProvider("http://test"), "test-key", true, "test-model", false)
+	service := correction.NewService(NewMockConfigProvider("http://test"), "test-key", true, "test-model", false, nil)
 
 	// Define TodoWrite tool schema
 	todoWriteSchema := types.Tool{
@@ -1214,7 +1214,7 @@ func TestTodoWriteValidation(t *testing.T) {
 
 // TestTodoWriteIDGeneration tests ID generation logic
 func TestTodoWriteIDGeneration(t *testing.T) {
-	service := correction.NewService(NewMockConfigProvider("http://test"), "test-key", true, "test-model", false)
+	service := correction.NewService(NewMockConfigProvider("http://test"), "test-key", true, "test-model", false, nil)
 
 	tests := []struct {
 		name     string
@@ -1272,7 +1272,7 @@ func TestTodoWriteIDGeneration(t *testing.T) {
 func TestCircuitBreakerPreventsInfiniteLoop(t *testing.T) {
 	// This test would require a more complex setup with mock LLM responses
 	// For now, we test the structure and logic bounds
-	service := correction.NewService(NewMockConfigProvider("http://test"), "test-key", true, "test-model", false)
+	service := correction.NewService(NewMockConfigProvider("http://test"), "test-key", true, "test-model", false, nil)
 
 	// Define TodoWrite tool schema
 	todoWriteSchema := types.Tool{
@@ -1314,7 +1314,7 @@ func TestCircuitBreakerPreventsInfiniteLoop(t *testing.T) {
 // TestSemanticToolCorrection tests WebFetch->Read correction for file:// URLs
 // Following SPARC: Test architectural issue detection and correction
 func TestSemanticToolCorrection(t *testing.T) {
-	service := correction.NewService(NewMockConfigProvider("http://test"), "test-key", true, "test-model", false)
+	service := correction.NewService(NewMockConfigProvider("http://test"), "test-key", true, "test-model", false, nil)
 	ctx := context.WithValue(context.Background(), internal.RequestIDKey, "semantic_test")
 	
 	// Define available tools including Read and WebFetch
@@ -1442,7 +1442,7 @@ func TestSemanticToolCorrection(t *testing.T) {
 
 // TestSemanticCorrectionIntegration tests semantic correction within full correction pipeline
 func TestSemanticCorrectionIntegration(t *testing.T) {
-	service := correction.NewService(NewMockConfigProvider("http://test"), "test-key", true, "test-model", false)
+	service := correction.NewService(NewMockConfigProvider("http://test"), "test-key", true, "test-model", false, nil)
 	ctx := context.WithValue(context.Background(), internal.RequestIDKey, "integration_test")
 	
 	availableTools := []types.Tool{

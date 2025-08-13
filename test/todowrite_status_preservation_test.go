@@ -10,7 +10,7 @@ import (
 
 // TestTodoWriteStatusPreservation tests that existing status values are not overridden during correction
 func TestTodoWriteStatusPreservation(t *testing.T) {
-	service := correction.NewService(NewMockConfigProvider("http://test"), "test-key", true, "test-model", false)
+	service := correction.NewService(NewMockConfigProvider("http://test"), "test-key", true, "test-model", false, nil)
 	ctx := context.WithValue(context.Background(), internal.RequestIDKey, "test-status-preservation")
 	
 	tests := []struct {

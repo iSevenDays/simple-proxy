@@ -71,7 +71,7 @@ func TestBasicRetryFunctionality(t *testing.T) {
 		defer server.Close()
 
 		config := NewSimpleRetryConfig([]string{server.URL, server.URL})
-		service := correction.NewService(config, "test-key", true, "test-model", false)
+		service := correction.NewService(config, "test-key", true, "test-model", false, nil)
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -120,7 +120,7 @@ func TestBasicRetryFunctionality(t *testing.T) {
 		defer successServer.Close()
 
 		config := NewSimpleRetryConfig([]string{timeoutServer.URL, successServer.URL})
-		service := correction.NewService(config, "test-key", true, "test-model", false)
+		service := correction.NewService(config, "test-key", true, "test-model", false, nil)
 
 		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 		defer cancel()
@@ -168,7 +168,7 @@ func TestBasicRetryFunctionality(t *testing.T) {
 		defer failServer.Close()
 
 		config := NewSimpleRetryConfig([]string{failServer.URL, failServer.URL, failServer.URL})
-		service := correction.NewService(config, "test-key", true, "test-model", false)
+		service := correction.NewService(config, "test-key", true, "test-model", false, nil)
 
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
@@ -228,7 +228,7 @@ func TestRetryWithCorrections(t *testing.T) {
 		defer server.Close()
 
 		config := NewSimpleRetryConfig([]string{server.URL, server.URL})
-		service := correction.NewService(config, "test-key", true, "test-model", false)
+		service := correction.NewService(config, "test-key", true, "test-model", false, nil)
 
 		// Tool call that needs correction
 		toolCalls := []types.Content{

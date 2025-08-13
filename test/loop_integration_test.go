@@ -25,7 +25,7 @@ func TestLoopDetectionIntegration_TodoWriteLoop(t *testing.T) {
 	}
 
 	// Create handler
-	handler := proxy.NewHandler(cfg, nil)
+	handler := proxy.NewHandler(cfg, nil, nil)
 
 	// Create a request that simulates the loop pattern from the logs
 	// This matches the actual Anthropic API format that Claude Code sends
@@ -124,7 +124,7 @@ func TestLoopDetectionIntegration_NoLoop(t *testing.T) {
 	cfg.ToolCorrectionEnabled = false
 
 	// Create handler
-	handler := proxy.NewHandler(cfg, nil)
+	handler := proxy.NewHandler(cfg, nil, nil)
 
 	// Create a normal request (no loop)
 	anthropicReq := types.AnthropicRequest{
@@ -177,7 +177,7 @@ func TestLoopDetectionIntegration_ConsecutiveIdentical(t *testing.T) {
 		ToolCorrectionEnabled: false,
 	}
 
-	handler := proxy.NewHandler(cfg, nil)
+	handler := proxy.NewHandler(cfg, nil, nil)
 
 	// Create consecutive identical Edit pattern (this should be detected as a loop)
 	anthropicReq := types.AnthropicRequest{

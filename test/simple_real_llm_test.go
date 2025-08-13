@@ -14,7 +14,7 @@ import (
 func TestSimpleRealLLM(t *testing.T) {
 	// Use real LLM endpoint from environment
 	cfg := NewMockConfigProvider()
-	service := correction.NewService(cfg, cfg.ToolCorrectionAPIKey, true, cfg.CorrectionModel, false)
+	service := correction.NewService(cfg, cfg.ToolCorrectionAPIKey, true, cfg.CorrectionModel, false, nil)
 	ctx := internal.WithRequestID(context.Background(), "test-simple-real-llm")
 
 	// Test a simple completion case that should be blocked

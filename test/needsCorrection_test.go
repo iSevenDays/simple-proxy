@@ -16,7 +16,7 @@ import (
 // TestNeedsCorrection tests the needsCorrection optimization function
 func TestNeedsCorrection(t *testing.T) {
 	// Create correction service for testing
-	service := correction.NewService(NewMockConfigProvider("http://test.com"), "test-key", false, "test-model", false)
+	service := correction.NewService(NewMockConfigProvider("http://test.com"), "test-key", false, "test-model", false, nil)
 	
 	// Define available tools
 	availableTools := []types.Tool{

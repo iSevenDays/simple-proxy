@@ -14,7 +14,7 @@ import (
 // This should catch cases that pattern-based validation missed
 func TestExitPlanModeLLMValidationMocked(t *testing.T) {
 	mockConfig := NewMockConfigProvider("http://mock-endpoint:8080/v1/chat/completions")
-	service := correction.NewService(mockConfig, "test-key", true, "test-model", false)
+	service := correction.NewService(mockConfig, "test-key", true, "test-model", false, nil)
 	ctx := internal.WithRequestID(context.Background(), "llm-validation-test")
 
 	tests := []struct {
@@ -209,7 +209,7 @@ func buildResearchThenPlanningMessages() []types.OpenAIMessage {
 // TestExitPlanModeLLMValidationPromptBuilding tests the prompt building functionality
 func TestExitPlanModeLLMValidationPromptBuilding(t *testing.T) {
 	mockConfig := NewMockConfigProvider("http://mock-endpoint:8080/v1/chat/completions")
-	service := correction.NewService(mockConfig, "test-key", true, "test-model", false)
+	service := correction.NewService(mockConfig, "test-key", true, "test-model", false, nil)
 
 	planContent := "I've successfully completed the implementation."
 	messages := buildImplementationMessages()

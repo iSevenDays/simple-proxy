@@ -14,7 +14,7 @@ import (
 // is bypassed due to early validation checks
 func TestTodoWriteCorrectionBypass(t *testing.T) {
 	mockConfig := NewMockConfigProvider("http://test.com")
-	service := correction.NewService(mockConfig, "test-key", true, "test-model", false)
+	service := correction.NewService(mockConfig, "test-key", true, "test-model", false, nil)
 	
 	// Define TodoWrite tool schema (simplified - matches the actual tool)
 	availableTools := []types.Tool{
