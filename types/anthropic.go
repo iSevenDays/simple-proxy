@@ -1,6 +1,9 @@
 package types
 
-import "strings"
+import (
+	"strings"
+	"claude-proxy/parser"
+)
 
 // AnthropicRequest represents incoming request from Claude Code
 type AnthropicRequest struct {
@@ -22,6 +25,23 @@ type AnthropicResponse struct {
 	StopReason   string    `json:"stop_reason"`
 	StopSequence *string   `json:"stop_sequence"`
 	Usage        Usage     `json:"usage"`
+
+	// Thinking metadata fields - optional for backward compatibility
+	ThinkingContent  *string          `json:"thinking_content,omitempty"`
+	HarmonyChannels  []parser.Channel `json:"harmony_channels,omitempty"`
+}
+
+// HasThinking returns true if this response contains thinking content
+func (r *AnthropicResponse) HasThinking() bool {
+	return r.ThinkingContent != nil && *r.ThinkingContent != ""
+}
+
+// GetThinkingText returns the thinking content as a string, empty if none
+func (r *AnthropicResponse) GetThinkingText() string {
+	if r.ThinkingContent != nil {
+		return *r.ThinkingContent
+	}
+	return ""
 }
 
 // Message represents a chat message
