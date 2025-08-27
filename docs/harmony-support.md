@@ -850,6 +850,229 @@ logger.Info("Harmony config: enabled=%v, debug=%v, strict=%v",
    curl localhost:3456/health | jq .harmony_config
    ```
 
+#### 5. Model-Specific Configuration Issues
+
+**Symptoms**:
+- Harmony parsing works with some models but not others
+- Inconsistent behavior across different providers
+- Model routing problems
+
+**Common Model Configurations**:
+
+**gpt-oss-120b (Harmony-native)**:
+```bash
+# .env configuration for gpt-oss-120b
+BIG_MODEL=gpt-oss-120b
+BIG_MODEL_ENDPOINT=https://api.gptfree.io/v1/chat/completions
+BIG_MODEL_API_KEY=your-api-key
+
+# Harmony settings
+HARMONY_PARSING_ENABLED=true
+HARMONY_DEBUG=true  # Enable for initial setup
+HARMONY_STRICT_MODE=false
+HARMONY_TOKEN_VALIDATION=true
+```
+
+**Claude Sonnet (think tags)**:
+```bash
+# Configuration for Claude models (uses <think></think> instead of Harmony)
+BIG_MODEL=claude-3-5-sonnet-20241022
+BIG_MODEL_ENDPOINT=https://api.anthropic.com/v1/messages
+BIG_MODEL_API_KEY=sk-ant-your-key
+
+# Harmony parsing can remain enabled (won't interfere)
+HARMONY_PARSING_ENABLED=true
+HARMONY_DEBUG=false  # Less useful for Claude models
+```
+
+**Local Models (Mixed Support)**:
+```bash
+# For local models with uncertain Harmony support
+SMALL_MODEL=llama-3.1-70b-instruct
+SMALL_MODEL_ENDPOINT=http://localhost:11434/v1/chat/completions
+SMALL_MODEL_API_KEY=ollama
+
+# Conservative Harmony settings
+HARMONY_PARSING_ENABLED=true
+HARMONY_STRICT_MODE=false  # Important: graceful fallback
+HARMONY_DEBUG=true  # Monitor behavior
+```
+
+**Diagnosis Commands**:
+```bash
+# Test model-specific Harmony behavior
+curl -X POST localhost:3456/v1/messages \
+  -H "Content-Type: application/json" \
+  -H "X-Model: gpt-oss-120b" \
+  -H "X-Debug-Headers: true" \
+  -d '{
+    "model": "gpt-oss-120b",
+    "max_tokens": 1000,
+    "messages": [{"role": "user", "content": "Please explain your thinking process step by step, then provide a final answer."}]
+  }' | jq '.harmony_channels'
+
+# Check response headers for debugging info
+curl -v -X POST localhost:3456/v1/messages \
+  -H "Content-Type: application/json" \
+  -H "X-Model: gpt-oss-120b" \
+  -d '{"model": "gpt-oss-120b", "max_tokens": 100, "messages": [{"role": "user", "content": "test"}]}' \
+  2>&1 | grep -i harmony
+```
+
+#### 6. Performance and Memory Issues
+
+**Symptoms**:
+- Slow parsing performance (>50ms for small content)
+- High memory usage during parsing
+- Memory leaks over time
+- OOM errors with large responses
+
+**Performance Diagnosis**:
+```bash
+# Enable performance monitoring
+export HARMONY_DEBUG=true
+export HARMONY_PERFORMANCE_OPTIMIZATION=true
+
+# Monitor parsing times in logs
+tail -f proxy.log | grep "Harmony response built" | grep -E "\([0-9.]+ms\)"
+
+# Check memory usage
+export HARMONY_CACHE_ENABLED=true
+export HARMONY_MAX_CONTENT_SIZE=524288  # 512KB limit
+
+# Profile memory usage
+go tool pprof http://localhost:3456/debug/pprof/heap
+```
+
+**Performance Optimization Solutions**:
+
+1. **Content Size Limiting**:
+   ```bash
+   # Limit content size for parsing
+   export HARMONY_MAX_CONTENT_SIZE=262144  # 256KB limit
+   
+   # For production with large responses
+   export HARMONY_MAX_CONTENT_SIZE=1048576  # 1MB limit
+   ```
+
+2. **Caching Configuration**:
+   ```bash
+   # Enable caching for repeated content (development)
+   export HARMONY_CACHE_ENABLED=true
+   export HARMONY_CACHE_SIZE=500  # Reduce if memory constrained
+   
+   # Disable caching for production (unless needed)
+   export HARMONY_CACHE_ENABLED=false
+   ```
+
+3. **Performance-Optimized Configuration**:
+   ```bash
+   # Production performance profile
+   export HARMONY_PARSING_ENABLED=true
+   export HARMONY_DEBUG=false
+   export HARMONY_STRICT_MODE=false
+   export HARMONY_PERFORMANCE_OPTIMIZATION=true
+   export HARMONY_TOKEN_VALIDATION=false  # Skip validation for performance
+   export HARMONY_MAX_CONTENT_SIZE=524288
+   ```
+
+4. **Memory Monitoring**:
+   ```go
+   // Add memory monitoring to your application
+   func monitorHarmonyMemory() {
+       var m runtime.MemStats
+       runtime.ReadMemStats(&m)
+       
+       logger.Info("Memory stats - Alloc: %d KB, TotalAlloc: %d KB, Sys: %d KB", 
+           bToKb(m.Alloc), bToKb(m.TotalAlloc), bToKb(m.Sys))
+   }
+   ```
+
+#### 7. Integration and Pipeline Issues
+
+**Symptoms**:
+- Tool overrides not working with Harmony content
+- System message overrides ignored
+- Streaming responses malformed
+- Pipeline processing errors
+
+**Integration Diagnosis**:
+```bash
+# Test tool override integration
+cat tools_override.yaml
+export PRINT_TOOL_SCHEMAS=true
+export HARMONY_DEBUG=true
+
+# Check system message processing
+cat system_overrides.yaml
+export PRINT_SYSTEM_MESSAGE=true
+
+# Test streaming compatibility
+curl -N -X POST localhost:3456/v1/messages \
+  -H "Content-Type: application/json" \
+  -H "Accept: text/event-stream" \
+  -d '{
+    "model": "gpt-oss-120b",
+    "stream": true,
+    "messages": [{"role": "user", "content": "Stream a Harmony response"}]
+  }'
+```
+
+**Integration Solutions**:
+
+1. **Tool Override Processing Order**:
+   ```yaml
+   # tools_override.yaml
+   - name: "WebSearch"
+     skip: false
+     description_override: "Enhanced search with Harmony awareness"
+   
+   # Verify processing order in logs:
+   # 1. Harmony parsing extracts channels
+   # 2. Tool overrides apply to extracted content  
+   # 3. System overrides process final content
+   # 4. Response transformation completes
+   ```
+
+2. **System Message Override with Harmony**:
+   ```yaml
+   # system_overrides.yaml
+   remove_patterns:
+     # Remove raw Harmony tokens if they leak through
+     - "⏺ <\\|channel\\|>analysis<\\|message\\|>.*?<\\|end\\|>"
+     - "<\\|start\\|>assistant<\\|channel\\|>.*?<\\|end\\|>"
+   
+   replacements:
+     - find: "Claude Code"
+       replace: "Your AI Assistant"
+   
+   prepend: "You are an expert assistant with access to thinking capabilities.\n\n"
+   ```
+
+3. **Streaming Response Handling**:
+   ```go
+   // Ensure proper streaming buffer management
+   type HarmonyStreamProcessor struct {
+       buffer       strings.Builder
+       channels     []parser.Channel
+       tokenBuffer  string
+   }
+   
+   func (hsp *HarmonyStreamProcessor) ProcessChunk(chunk string) error {
+       // Append to buffer
+       hsp.buffer.WriteString(chunk)
+       
+       // Process complete tokens only
+       content := hsp.buffer.String()
+       if completeChannels := extractCompleteChannels(content); len(completeChannels) > 0 {
+           hsp.channels = append(hsp.channels, completeChannels...)
+           hsp.cleanProcessedContent()
+       }
+       
+       return nil
+   }
+   ```
+
 ### Debug Logging Guide
 
 #### Enable Comprehensive Debug Logging
@@ -864,24 +1087,352 @@ export LOG_LEVEL=debug
 ./simple-proxy
 ```
 
-#### Key Log Messages
+#### Key Log Messages and Interpretation
 
 **Successful Parsing**:
 ```
 DEBUG: 🔍 Harmony tokens detected, performing full extraction
 DEBUG: 🔍 Harmony extraction complete: 2 total channels (thinking=1, response=1, tools=0)
 DEBUG: 🎵 Building Harmony response with 2 channels
+DEBUG: 🎵 Harmony response built: 3 content items, thinking=true, stop_reason=end_turn (5.2ms)
 ```
+**Interpretation**: Normal operation with 2 channels detected (thinking + response), parsed in 5.2ms
 
-**Failed Parsing**:
+**Failed Parsing - No Tokens**:
 ```
 DEBUG: 🔍 No Harmony tokens detected in content
+DEBUG: 📝 Using standard response transformation
+```
+**Interpretation**: Content doesn't contain Harmony tokens, fallback to normal processing (expected for non-Harmony models)
+
+**Failed Parsing - Malformed Content**:
+```
+DEBUG: 🔍 Harmony tokens detected, performing full extraction  
 WARN: ⚠️ Harmony tokens found but no channels extracted - treating as non-Harmony
+WARN: ⚠️ Malformed token sequence detected: missing end token for channel 'analysis'
+```
+**Interpretation**: Harmony tokens exist but parsing failed due to malformed structure
+
+**Performance Issues**:
+```
+DEBUG: 🎵 Harmony response built: 1 content items, thinking=false, stop_reason=end_turn (127ms)
+WARN: ⚠️ Harmony parsing took longer than expected: 127ms for 45KB content
+```
+**Interpretation**: Slow parsing performance indicates potential optimization needs
+
+**Memory Issues**:
+```
+DEBUG: 🧠 Harmony cache enabled: 450/1000 entries (2.1MB memory usage)
+WARN: ⚠️ Content size 2.5MB exceeds limit 1MB, truncating before parsing
+ERROR: ❌ Harmony parsing failed: out of memory during channel extraction
+```
+**Interpretation**: Memory constraints affecting parsing, consider reducing content size or disabling cache
+
+**Configuration Issues**:
+```
+INFO: ⚙️ Harmony parsing disabled via configuration
+DEBUG: 🔧 Harmony config: enabled=false, debug=true, strict=false
+WARN: ⚠️ HARMONY_DEBUG=true but HARMONY_PARSING_ENABLED=false - debug logs will be minimal
+```
+**Interpretation**: Configuration mismatch or intentional disabling
+
+**Streaming-Specific Logs**:
+```
+DEBUG: 🌊 Processing streaming chunk 3/7: partial channel detected
+DEBUG: 🌊 Streaming buffer: 1024 bytes, complete channels: 1
+DEBUG: 🌊 Final streaming consolidation: 2 channels merged
+```
+**Interpretation**: Streaming response processing with gradual channel assembly
+
+**Token Validation Errors**:
+```
+WARN: 🔍 Token validation failed: role 'assitant' not recognized (typo?)
+WARN: 🔍 Token validation failed: channel 'analysys' not standard (typo?)
+DEBUG: 🔍 Validation errors: 2, proceeding with graceful parsing
+```
+**Interpretation**: Typos in Harmony tokens, but graceful mode continues processing
+
+### Common Parsing Issues and Advanced Solutions
+
+#### Issue 1: Token Recognition Failures
+
+**Problem**: Model output contains Harmony-like content but isn't detected
+```
+Response: "I need to think about this <|channel|>analysis but the format is wrong"
+Log: DEBUG: 🔍 No Harmony tokens detected in content
 ```
 
-**Performance Monitoring**:
+**Root Cause Analysis**:
+```bash
+# Check exact token format
+echo "Response content" | grep -E "<\|[^|]+\|>"
+
+# Expected format
+<|start|>assistant<|channel|>analysis<|message|>content<|end|>
+
+# Common malformed patterns
+<|channel|>analysis<|message|>content          # Missing start/end
+<start>assistant<channel>analysis<message>     # Missing pipe delimiters
+<|start|>assistant|channel|>analysis|message>  # Wrong separator usage
 ```
-DEBUG: 🎵 Harmony response built: 3 content items, thinking=true, stop_reason=end_turn (5.2ms)
+
+**Solutions**:
+```go
+// 1. Enable token validation to identify format issues
+export HARMONY_TOKEN_VALIDATION=true
+export HARMONY_DEBUG=true
+
+// 2. Check regex pattern matching
+func debugTokenMatching(content string) {
+    patterns := []string{
+        `<\|start\|>`,           // Start token
+        `<\|channel\|>`,         // Channel delimiter  
+        `<\|message\|>`,         // Message delimiter
+        `<\|end\|>`,             // End token
+    }
+    
+    for _, pattern := range patterns {
+        if matched, _ := regexp.MatchString(pattern, content); matched {
+            logger.Debug("Pattern matched: %s", pattern)
+        } else {
+            logger.Warn("Pattern missing: %s", pattern)
+        }
+    }
+}
+```
+
+#### Issue 2: Incomplete Channel Extraction
+
+**Problem**: Some channels extracted, others missed
+```
+Log: DEBUG: 🔍 Harmony extraction complete: 1 total channels (thinking=1, response=0, tools=0)
+Expected: 2 channels (thinking + response)
+```
+
+**Common Patterns**:
+```
+# Pattern 1: Missing end token
+<|start|>assistant<|channel|>analysis<|message|>thinking content
+<|start|>assistant<|channel|>final<|message|>response content<|end|>
+
+# Pattern 2: Nested tokens (unsupported)
+<|start|>assistant<|channel|>analysis<|message|>
+  I think <|channel|>final<|message|>this is wrong<|end|>
+<|end|>
+
+# Pattern 3: Content spanning multiple channels incorrectly
+<|start|>assistant<|channel|>analysis<|message|>thinking<|channel|>final<|message|>response<|end|>
+```
+
+**Solutions**:
+```go
+// 1. Content preprocessing for common issues
+func preprocessHarmonyContent(content string) string {
+    // Fix missing end tokens (heuristic)
+    content = regexp.MustCompile(`(<\|start\|>[^<]*<\|message\|>[^<]*?)(<\|start\|>)`).ReplaceAllString(content, "${1}<|end|>${2}")
+    
+    // Remove nested channel tokens
+    content = regexp.MustCompile(`(<\|message\|>[^<]*?)<\|channel\|>[^<]*?<\|message\|>`).ReplaceAllString(content, "${1}")
+    
+    return content
+}
+
+// 2. Validation and reporting
+func validateChannelCompleteness(content string, channels []parser.Channel) []error {
+    errors := []error{}
+    
+    // Count expected vs actual channels
+    expectedStart := strings.Count(content, "<|start|>")
+    extractedChannels := len(channels)
+    
+    if expectedStart != extractedChannels {
+        errors = append(errors, fmt.Errorf(
+            "channel count mismatch: expected %d, extracted %d", 
+            expectedStart, extractedChannels))
+    }
+    
+    return errors
+}
+```
+
+#### Issue 3: Content Truncation and Loss
+
+**Problem**: Large responses truncated or content lost during parsing
+```
+Log: WARN: ⚠️ Content size 2.5MB exceeds limit 1MB, truncating before parsing
+Log: WARN: ⚠️ Channel content truncated: original 15KB, extracted 8KB
+```
+
+**Analysis**:
+```go
+// Monitor content sizes throughout pipeline
+func monitorContentFlow(stage string, content string) {
+    size := len(content)
+    channelCount := strings.Count(content, "<|start|>")
+    
+    logger.Debug("Content flow [%s]: size=%d bytes, channels=%d", 
+        stage, size, channelCount)
+    
+    if size > 100000 { // 100KB
+        logger.Warn("Large content detected at stage %s: %d bytes", stage, size)
+    }
+}
+```
+
+**Solutions**:
+```bash
+# 1. Increase content size limits
+export HARMONY_MAX_CONTENT_SIZE=2097152  # 2MB
+
+# 2. Implement smart truncation
+export HARMONY_SMART_TRUNCATION=true  # Keep complete channels only
+
+# 3. Stream processing for large content
+export HARMONY_STREAMING_PARSE=true   # Process in chunks
+```
+
+#### Issue 4: Model-Specific Token Variations
+
+**Problem**: Different models use slightly different Harmony formats
+```
+# gpt-oss-120b format
+<|start|>assistant<|channel|>analysis<|message|>content<|end|>
+
+# Custom model variations
+<|begin|>assistant<|type|>thinking<|content|>content<|finish|>
+[START]assistant[CHANNEL]analysis[MSG]content[END]
+```
+
+**Adaptive Parsing Solution**:
+```go
+// Multi-pattern parser with model-specific configurations
+type ModelConfig struct {
+    Name         string
+    StartToken   string
+    EndToken     string
+    ChannelToken string
+    MessageToken string
+}
+
+var modelConfigs = map[string]ModelConfig{
+    "gpt-oss-120b": {
+        StartToken:   `<\|start\|>`,
+        EndToken:     `<\|end\|>`, 
+        ChannelToken: `<\|channel\|>`,
+        MessageToken: `<\|message\|>`,
+    },
+    "custom-harmony-model": {
+        StartToken:   `<\|begin\|>`,
+        EndToken:     `<\|finish\|>`,
+        ChannelToken: `<\|type\|>`, 
+        MessageToken: `<\|content\|>`,
+    },
+}
+
+func parseWithModelConfig(content string, model string) []parser.Channel {
+    config, exists := modelConfigs[model]
+    if !exists {
+        // Fallback to standard parsing
+        return parser.ExtractChannels(content)
+    }
+    
+    return parseWithCustomTokens(content, config)
+}
+```
+
+#### Issue 5: Performance Degradation with Complex Content
+
+**Problem**: Parsing performance degrades significantly with complex Harmony structures
+```
+Log: WARN: ⚠️ Harmony parsing took longer than expected: 2.3s for 500KB content
+Log: ERROR: ❌ Parser timeout after 5s, falling back to standard processing
+```
+
+**Performance Analysis**:
+```go
+// Benchmark different content patterns
+func BenchmarkComplexHarmonyParsing(b *testing.B) {
+    // Test patterns
+    simpleContent := generateHarmonyContent(2, 1000)    // 2 channels, 1KB each
+    complexContent := generateHarmonyContent(50, 10000) // 50 channels, 10KB each
+    nestedContent := generateNestedHarmonyContent(10)   // 10 levels deep
+    
+    b.Run("Simple", func(b *testing.B) {
+        for i := 0; i < b.N; i++ {
+            parser.ExtractChannels(simpleContent)
+        }
+    })
+    
+    b.Run("Complex", func(b *testing.B) {
+        for i := 0; i < b.N; i++ {
+            parser.ExtractChannels(complexContent)
+        }
+    })
+}
+```
+
+**Optimization Solutions**:
+```go
+// 1. Early content analysis
+func shouldUseOptimizedParsing(content string) bool {
+    channelCount := strings.Count(content, "<|start|>")
+    contentSize := len(content)
+    
+    // Use optimized parsing for complex content
+    return channelCount > 10 || contentSize > 50000
+}
+
+// 2. Parallel channel processing
+func extractChannelsParallel(content string) []parser.Channel {
+    channelBoundaries := findChannelBoundaries(content)
+    
+    channels := make([]parser.Channel, len(channelBoundaries))
+    var wg sync.WaitGroup
+    
+    for i, boundary := range channelBoundaries {
+        wg.Add(1)
+        go func(i int, boundary ChannelBoundary) {
+            defer wg.Done()
+            channels[i] = parseChannel(content[boundary.Start:boundary.End])
+        }(i, boundary)
+    }
+    
+    wg.Wait()
+    return channels
+}
+
+// 3. Content caching with TTL
+type ParseCache struct {
+    cache map[string]CacheEntry
+    mutex sync.RWMutex
+}
+
+type CacheEntry struct {
+    channels []parser.Channel
+    expiry   time.Time
+}
+
+func (pc *ParseCache) GetOrParse(content string) []parser.Channel {
+    hash := hashContent(content)
+    
+    pc.mutex.RLock()
+    if entry, exists := pc.cache[hash]; exists && time.Now().Before(entry.expiry) {
+        pc.mutex.RUnlock()
+        return entry.channels
+    }
+    pc.mutex.RUnlock()
+    
+    // Parse and cache with TTL
+    channels := parser.ExtractChannels(content)
+    pc.mutex.Lock()
+    pc.cache[hash] = CacheEntry{
+        channels: channels,
+        expiry:   time.Now().Add(5 * time.Minute),
+    }
+    pc.mutex.Unlock()
+    
+    return channels
+}
 ```
 
 ### Testing and Validation
@@ -899,6 +1450,39 @@ func TestHarmonyParsing(t *testing.T) {
     assert.Equal(t, parser.ChannelAnalysis, channels[0].Type)
     assert.Equal(t, parser.ChannelFinal, channels[1].Type)
 }
+
+// Test malformed content handling
+func TestMalformedHarmonyContent(t *testing.T) {
+    testCases := []struct {
+        name     string
+        content  string
+        expected int // Expected number of channels extracted
+    }{
+        {
+            name: "missing_end_token",
+            content: `<|start|>assistant<|channel|>analysis<|message|>thinking content
+                     <|start|>assistant<|channel|>final<|message|>response<|end|>`,
+            expected: 1, // Only second channel complete
+        },
+        {
+            name: "invalid_role",
+            content: `<|start|>assitant<|channel|>analysis<|message|>content<|end|>`,
+            expected: 0, // Validation should reject
+        },
+        {
+            name: "nested_tokens",
+            content: `<|start|>assistant<|channel|>analysis<|message|>outer <|start|> inner <|end|> content<|end|>`,
+            expected: 1, // Should handle gracefully
+        },
+    }
+    
+    for _, tc := range testCases {
+        t.Run(tc.name, func(t *testing.T) {
+            channels := parser.ExtractChannels(tc.content)
+            assert.Equal(t, tc.expected, len(channels), "Unexpected channel count for %s", tc.name)
+        })
+    }
+}
 ```
 
 #### Integration Testing
@@ -913,6 +1497,57 @@ curl -X POST localhost:3456/v1/messages \
     "max_tokens": 1000,
     "messages": [{"role": "user", "content": "Analyze this code"}]
   }'
+
+# Comprehensive integration test script
+#!/bin/bash
+# integration_test.sh
+
+# Test different configurations
+configurations=(
+    "HARMONY_PARSING_ENABLED=true HARMONY_DEBUG=true HARMONY_STRICT_MODE=false"
+    "HARMONY_PARSING_ENABLED=true HARMONY_DEBUG=false HARMONY_STRICT_MODE=true"
+    "HARMONY_PARSING_ENABLED=false"
+)
+
+for config in "${configurations[@]}"; do
+    echo "Testing configuration: $config"
+    
+    # Set environment
+    eval "export $config"
+    
+    # Restart proxy
+    pkill -f simple-proxy
+    ./simple-proxy &
+    PROXY_PID=$!
+    sleep 2
+    
+    # Run test requests
+    response=$(curl -s -X POST localhost:3456/v1/messages \
+        -H "Content-Type: application/json" \
+        -H "X-Model: gpt-oss-120b" \
+        -d '{
+            "model": "gpt-oss-120b",
+            "max_tokens": 500,
+            "messages": [{"role": "user", "content": "Please provide a detailed analysis with your thinking process."}]
+        }')
+    
+    # Validate response structure
+    if echo "$response" | jq -e '.thinking_content' > /dev/null; then
+        echo "✅ Thinking content present"
+    else
+        echo "❌ Thinking content missing"
+    fi
+    
+    if echo "$response" | jq -e '.harmony_channels' > /dev/null; then
+        echo "✅ Harmony channels present"
+    else
+        echo "❌ Harmony channels missing" 
+    fi
+    
+    # Clean up
+    kill $PROXY_PID
+    echo "---"
+done
 ```
 
 ## Performance Characteristics
@@ -981,6 +1616,322 @@ func ExtractChannelsOptimized(content string) []Channel {
     
     // Use pooled slice for processing
     return processChannels(content, channels)
+}
+```
+
+#### 4. Content Preprocessing Optimization
+
+```go
+// Optimize content before parsing
+type ContentOptimizer struct {
+    maxSize          int
+    enableTruncation bool
+    smartTruncation  bool
+}
+
+func (co *ContentOptimizer) OptimizeContent(content string) string {
+    // 1. Size-based optimization
+    if co.enableTruncation && len(content) > co.maxSize {
+        if co.smartTruncation {
+            // Keep complete channels only
+            return co.truncateAtChannelBoundary(content)
+        }
+        return content[:co.maxSize]
+    }
+    
+    // 2. Remove redundant whitespace
+    content = regexp.MustCompile(`\s+`).ReplaceAllString(content, " ")
+    
+    // 3. Normalize token spacing
+    content = regexp.MustCompile(`(<\|[^|]+\|>)\s*`).ReplaceAllString(content, "${1}")
+    
+    return content
+}
+
+func (co *ContentOptimizer) truncateAtChannelBoundary(content string) string {
+    // Find last complete channel within size limit
+    for i := co.maxSize; i > 0; i-- {
+        if strings.HasPrefix(content[i:], "<|end|>") {
+            return content[:i+7] // Include the end token
+        }
+    }
+    return content[:co.maxSize]
+}
+```
+
+#### 5. Parallel Processing for Large Content
+
+```go
+// Process multiple channels in parallel
+type ParallelParser struct {
+    workerCount int
+    chunkSize   int
+}
+
+func (pp *ParallelParser) ExtractChannels(content string) []Channel {
+    chunks := pp.splitIntoChunks(content)
+    if len(chunks) <= 1 {
+        // Small content, use sequential processing
+        return parser.ExtractChannels(content)
+    }
+    
+    // Parallel processing for large content
+    channelChan := make(chan []parser.Channel, len(chunks))
+    var wg sync.WaitGroup
+    
+    for _, chunk := range chunks {
+        wg.Add(1)
+        go func(chunk string) {
+            defer wg.Done()
+            channelChan <- parser.ExtractChannels(chunk)
+        }(chunk)
+    }
+    
+    wg.Wait()
+    close(channelChan)
+    
+    // Merge results
+    var allChannels []parser.Channel
+    for channels := range channelChan {
+        allChannels = append(allChannels, channels...)
+    }
+    
+    return allChannels
+}
+```
+
+#### 6. Intelligent Caching Strategy
+
+```go
+// Multi-tier caching system
+type IntelligentCache struct {
+    l1Cache    map[string][]parser.Channel  // In-memory, small & fast
+    l2Cache    *lru.Cache                   // LRU cache, medium size  
+    l3Cache    *redis.Client               // Redis cache, large & persistent
+    
+    l1Size     int
+    l2Size     int
+    l3TTL      time.Duration
+}
+
+func (ic *IntelligentCache) GetOrParse(content string) []parser.Channel {
+    hash := ic.hashContent(content)
+    
+    // L1: In-memory cache (fastest)
+    if channels, exists := ic.l1Cache[hash]; exists {
+        return channels
+    }
+    
+    // L2: LRU cache  
+    if channels, exists := ic.l2Cache.Get(hash); exists {
+        channelsSlice := channels.([]parser.Channel)
+        ic.l1Cache[hash] = channelsSlice  // Promote to L1
+        return channelsSlice
+    }
+    
+    // L3: Redis cache (distributed)
+    if channels, err := ic.getFromRedis(hash); err == nil {
+        ic.l2Cache.Add(hash, channels)    // Promote to L2
+        ic.l1Cache[hash] = channels       // Promote to L1
+        return channels
+    }
+    
+    // Parse and cache at all levels
+    channels := parser.ExtractChannels(content)
+    
+    ic.l1Cache[hash] = channels
+    ic.l2Cache.Add(hash, channels)
+    ic.setInRedis(hash, channels, ic.l3TTL)
+    
+    return channels
+}
+```
+
+#### 7. Environment-Specific Optimizations
+
+```bash
+# Development environment (debugging over performance)
+export HARMONY_PARSING_ENABLED=true
+export HARMONY_DEBUG=true
+export HARMONY_STRICT_MODE=true
+export HARMONY_TOKEN_VALIDATION=true
+export HARMONY_CACHE_ENABLED=true
+export HARMONY_CACHE_SIZE=100          # Small cache
+export HARMONY_MAX_CONTENT_SIZE=262144 # 256KB limit
+
+# Production environment (maximum performance)
+export HARMONY_PARSING_ENABLED=true
+export HARMONY_DEBUG=false
+export HARMONY_STRICT_MODE=false
+export HARMONY_PERFORMANCE_OPTIMIZATION=true
+export HARMONY_TOKEN_VALIDATION=false  # Skip validation
+export HARMONY_CACHE_ENABLED=true
+export HARMONY_CACHE_SIZE=5000         # Large cache
+export HARMONY_MAX_CONTENT_SIZE=1048576 # 1MB limit
+
+# Memory-constrained environment
+export HARMONY_PARSING_ENABLED=true
+export HARMONY_DEBUG=false
+export HARMONY_STRICT_MODE=false
+export HARMONY_CACHE_ENABLED=false     # Disable caching
+export HARMONY_MAX_CONTENT_SIZE=131072 # 128KB limit
+export HARMONY_PERFORMANCE_OPTIMIZATION=true
+
+# High-throughput environment
+export HARMONY_PARSING_ENABLED=true
+export HARMONY_DEBUG=false
+export HARMONY_STRICT_MODE=false
+export HARMONY_PERFORMANCE_OPTIMIZATION=true
+export HARMONY_PARALLEL_PROCESSING=true
+export HARMONY_WORKER_COUNT=4          # CPU cores
+export HARMONY_CACHE_ENABLED=true
+export HARMONY_CACHE_SIZE=10000        # Very large cache
+```
+
+#### 8. Performance Monitoring and Auto-Tuning
+
+```go
+// Auto-tuning performance system
+type PerformanceMonitor struct {
+    parseLatencies []time.Duration
+    memoryUsage   []uint64
+    cacheHitRate  float64
+    
+    config *config.Config
+    mutex  sync.RWMutex
+}
+
+func (pm *PerformanceMonitor) RecordParseLatency(latency time.Duration) {
+    pm.mutex.Lock()
+    defer pm.mutex.Unlock()
+    
+    pm.parseLatencies = append(pm.parseLatencies, latency)
+    
+    // Auto-tune based on performance
+    if len(pm.parseLatencies) >= 100 {
+        pm.autoTune()
+        pm.parseLatencies = []time.Duration{} // Reset
+    }
+}
+
+func (pm *PerformanceMonitor) autoTune() {
+    avgLatency := pm.calculateAverageLatency()
+    p95Latency := pm.calculateP95Latency()
+    
+    // Auto-adjust cache size
+    if p95Latency > 50*time.Millisecond {
+        // Performance is slow, increase cache
+        currentSize := pm.config.HarmonyCacheSize
+        newSize := int(float64(currentSize) * 1.2)
+        pm.config.SetHarmonyCacheSize(newSize)
+        logger.Info("Auto-tuned: increased cache size to %d", newSize)
+    }
+    
+    // Auto-adjust content size limit
+    if avgLatency > 20*time.Millisecond {
+        // Reduce content size limit
+        currentLimit := pm.config.HarmonyMaxContentSize
+        newLimit := int(float64(currentLimit) * 0.8)
+        pm.config.SetHarmonyMaxContentSize(newLimit)
+        logger.Info("Auto-tuned: reduced content size limit to %d", newLimit)
+    }
+    
+    // Auto-enable parallel processing
+    if p95Latency > 100*time.Millisecond && !pm.config.HarmonyParallelProcessing {
+        pm.config.SetHarmonyParallelProcessing(true)
+        logger.Info("Auto-tuned: enabled parallel processing")
+    }
+}
+```
+
+#### 9. Hardware-Specific Optimizations
+
+```go
+// CPU-optimized parsing
+func optimizeForCPU() {
+    // Detect CPU characteristics
+    cpuCount := runtime.NumCPU()
+    l1CacheSize := getCPUL1CacheSize() // Platform-specific
+    
+    // Configure based on CPU
+    if cpuCount >= 8 {
+        // High-core count: enable parallel processing
+        os.Setenv("HARMONY_PARALLEL_PROCESSING", "true")
+        os.Setenv("HARMONY_WORKER_COUNT", fmt.Sprintf("%d", cpuCount/2))
+    }
+    
+    if l1CacheSize >= 32*1024 { // 32KB L1 cache
+        // Large cache: increase pattern buffer sizes
+        os.Setenv("HARMONY_PATTERN_BUFFER_SIZE", "8192")
+    }
+    
+    // Set GOMAXPROCS for optimal Go performance
+    runtime.GOMAXPROCS(cpuCount)
+}
+
+// Memory-optimized parsing  
+func optimizeForMemory() {
+    var m runtime.MemStats
+    runtime.ReadMemStats(&m)
+    
+    availableMemory := m.Sys
+    
+    if availableMemory < 512*1024*1024 { // Less than 512MB
+        // Low memory: disable caching, reduce limits
+        os.Setenv("HARMONY_CACHE_ENABLED", "false")
+        os.Setenv("HARMONY_MAX_CONTENT_SIZE", "65536") // 64KB
+        os.Setenv("HARMONY_PARALLEL_PROCESSING", "false")
+    } else if availableMemory > 4*1024*1024*1024 { // More than 4GB
+        // High memory: enable large cache
+        os.Setenv("HARMONY_CACHE_SIZE", "50000")
+        os.Setenv("HARMONY_MAX_CONTENT_SIZE", "4194304") // 4MB
+    }
+}
+```
+
+#### 10. Profiling and Continuous Optimization
+
+```go
+// Built-in profiling support
+import _ "net/http/pprof"
+
+func enableProfiling() {
+    go func() {
+        log.Println(http.ListenAndServe("localhost:6060", nil))
+    }()
+}
+
+// Usage: go tool pprof http://localhost:6060/debug/pprof/profile
+// For memory: go tool pprof http://localhost:6060/debug/pprof/heap
+
+// Continuous performance benchmarking
+func runContinuousBenchmarks() {
+    ticker := time.NewTicker(1 * time.Hour)
+    defer ticker.Stop()
+    
+    for {
+        select {
+        case <-ticker.C:
+            // Run performance benchmarks
+            results := runHarmonyBenchmarks()
+            
+            // Log performance metrics
+            logger.Info("Harmony performance metrics: "+
+                "avg_parse_time=%dms, "+
+                "memory_usage=%dMB, "+
+                "cache_hit_rate=%.2f%%", 
+                results.AvgParseTime.Milliseconds(),
+                results.MemoryUsage/(1024*1024),
+                results.CacheHitRate*100)
+            
+            // Alert on performance degradation
+            if results.AvgParseTime > 50*time.Millisecond {
+                logger.Warn("Harmony performance degradation detected")
+                // Trigger auto-optimization
+                optimizePerformance(results)
+            }
+        }
+    }
 }
 ```
 
