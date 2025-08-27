@@ -55,6 +55,26 @@ type Config struct {
 	// System message overrides (loaded from system_overrides.yaml)
 	SystemMessageOverrides SystemMessageOverrides `json:"system_message_overrides"`
 
+	// Harmony parsing configuration (.env configurable)
+	// 
+	// Harmony format is OpenAI's structured response format that allows models
+	// to separate thinking/reasoning content from final user-facing responses.
+	// These settings control how the proxy handles Harmony-formatted content
+	// during request/response transformation.
+	//
+	// Environment variables:
+	//   HARMONY_PARSING_ENABLED - Enable/disable Harmony format parsing (default: true)
+	//   HARMONY_DEBUG          - Enable debug logging for parsing operations (default: false)
+	//   HARMONY_STRICT_MODE    - Strict error handling for malformed content (default: false)
+	//
+	// Integration points:
+	//   - Stream B (Detection): Uses HarmonyParsingEnabled to decide whether to detect Harmony tokens
+	//   - Stream C (Response Building): Uses HarmonyDebug and HarmonyStrictMode for error handling
+	//   - Transformation pipeline: Uses these settings to control parsing behavior
+	HarmonyParsingEnabled bool `json:"harmony_parsing_enabled"` // Enable/disable Harmony format parsing
+	HarmonyDebug          bool `json:"harmony_debug"`           // Enable debug logging for Harmony parsing
+	HarmonyStrictMode     bool `json:"harmony_strict_mode"`     // Enable strict error handling for malformed Harmony content
+
 	// Model configuration (.env configurable)
 	BigModel        string `json:"big_model"`        // For Claude Sonnet requests
 	SmallModel      string `json:"small_model"`      // For Claude Haiku requests
@@ -137,6 +157,9 @@ func GetDefaultConfig() *Config {
 		ConversationMaskSensitive:    true,                     // Enable sensitive data masking by default
 		EnableToolChoiceCorrection:   false,                    // Disable tool choice correction by default
 		SystemMessageOverrides:       SystemMessageOverrides{}, // Empty by default
+		HarmonyParsingEnabled:        true,                     // Enable Harmony parsing by default
+		HarmonyDebug:                 false,                    // Disable debug logging by default
+		HarmonyStrictMode:            false,                    // Disable strict mode by default
 		BigModel:                     "",                       // Will be set from .env
 		SmallModel:                   "",                       // Will be set from .env
 		CorrectionModel:              "",                       // Will be set from .env
@@ -175,6 +198,9 @@ func LoadConfigWithEnv() (*Config, error) {
 		DefaultConnectionTimeout:     30,                       // 30 seconds default connection timeout
 		EnableToolChoiceCorrection:   false,                    // Disable tool choice correction by default
 		SystemMessageOverrides:       SystemMessageOverrides{}, // Empty by default
+		HarmonyParsingEnabled:        true,                     // Enable Harmony parsing by default
+		HarmonyDebug:                 false,                    // Disable debug logging by default
+		HarmonyStrictMode:            false,                    // Disable strict mode by default
 		HealthManager:              circuitbreaker.NewHealthManager(circuitbreaker.DefaultConfig()),
 	}
 
@@ -540,6 +566,57 @@ func LoadConfigWithEnv() (*Config, error) {
 			cfg.logInfo("configuration", "request", "", "Configured ENABLE_TOOL_CHOICE_CORRECTION", map[string]interface{}{
 				"enabled": false,
 				"description": "tool choice correction disabled",
+			})
+		}
+	}
+
+	// Parse HARMONY_PARSING_ENABLED (optional, defaults to true)
+	if harmonyParsingEnabled, exists := envVars["HARMONY_PARSING_ENABLED"]; exists {
+		if harmonyParsingEnabled == "false" || harmonyParsingEnabled == "0" {
+			cfg.HarmonyParsingEnabled = false
+			cfg.logInfo("configuration", "request", "", "Configured HARMONY_PARSING_ENABLED", map[string]interface{}{
+				"enabled": false,
+				"description": "Harmony parsing disabled",
+			})
+		} else {
+			cfg.HarmonyParsingEnabled = true
+			cfg.logInfo("configuration", "request", "", "Configured HARMONY_PARSING_ENABLED", map[string]interface{}{
+				"enabled": true,
+				"description": "Harmony parsing enabled",
+			})
+		}
+	}
+
+	// Parse HARMONY_DEBUG (optional, defaults to false)
+	if harmonyDebug, exists := envVars["HARMONY_DEBUG"]; exists {
+		if harmonyDebug == "true" || harmonyDebug == "1" {
+			cfg.HarmonyDebug = true
+			cfg.logInfo("configuration", "request", "", "Configured HARMONY_DEBUG", map[string]interface{}{
+				"enabled": true,
+				"description": "Harmony debug logging enabled",
+			})
+		} else {
+			cfg.HarmonyDebug = false
+			cfg.logInfo("configuration", "request", "", "Configured HARMONY_DEBUG", map[string]interface{}{
+				"enabled": false,
+				"description": "Harmony debug logging disabled",
+			})
+		}
+	}
+
+	// Parse HARMONY_STRICT_MODE (optional, defaults to false)
+	if harmonyStrictMode, exists := envVars["HARMONY_STRICT_MODE"]; exists {
+		if harmonyStrictMode == "true" || harmonyStrictMode == "1" {
+			cfg.HarmonyStrictMode = true
+			cfg.logInfo("configuration", "request", "", "Configured HARMONY_STRICT_MODE", map[string]interface{}{
+				"enabled": true,
+				"description": "strict error handling for malformed Harmony content",
+			})
+		} else {
+			cfg.HarmonyStrictMode = false
+			cfg.logInfo("configuration", "request", "", "Configured HARMONY_STRICT_MODE", map[string]interface{}{
+				"enabled": false,
+				"description": "lenient error handling for malformed Harmony content",
 			})
 		}
 	}
@@ -941,4 +1018,35 @@ func (c *Config) MarkEndpointFailed(endpointType string) {
 			})
 		}
 	}
+}
+
+// ============================================================================
+// HARMONY PARSING CONFIGURATION API
+// ============================================================================
+
+// IsHarmonyParsingEnabled returns whether Harmony format parsing is enabled
+// This is the primary integration point for other components to check if
+// Harmony parsing should be performed on response content
+func (c *Config) IsHarmonyParsingEnabled() bool {
+	return c.HarmonyParsingEnabled
+}
+
+// IsHarmonyDebugEnabled returns whether Harmony debug logging is enabled
+// Components should use this to decide whether to emit detailed debug logs
+// about Harmony parsing operations
+func (c *Config) IsHarmonyDebugEnabled() bool {
+	return c.HarmonyDebug
+}
+
+// IsHarmonyStrictModeEnabled returns whether strict error handling is enabled
+// When true, components should treat malformed Harmony content as an error
+// When false, components should gracefully handle malformed content
+func (c *Config) IsHarmonyStrictModeEnabled() bool {
+	return c.HarmonyStrictMode
+}
+
+// GetHarmonyConfiguration returns all Harmony-related configuration values
+// Useful for components that need to access multiple Harmony settings
+func (c *Config) GetHarmonyConfiguration() (enabled, debug, strict bool) {
+	return c.HarmonyParsingEnabled, c.HarmonyDebug, c.HarmonyStrictMode
 }
