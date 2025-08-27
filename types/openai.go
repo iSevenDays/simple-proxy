@@ -1,5 +1,7 @@
 package types
 
+import "claude-proxy/parser"
+
 // OpenAIRequest represents request to provider (configured via .env)
 type OpenAIRequest struct {
 	Model       string          `json:"model"`
@@ -45,6 +47,10 @@ type OpenAIChoice struct {
 	Index        int           `json:"index"`
 	Message      OpenAIMessage `json:"message"`
 	FinishReason *string       `json:"finish_reason"`
+
+	// Thinking metadata fields for Harmony parsing (optional, backward compatible)
+	ThinkingContent  *string           `json:"thinking_content,omitempty"`
+	HarmonyChannels  []parser.Channel  `json:"harmony_channels,omitempty"`
 }
 
 // OpenAIStreamChoice represents streaming response choice
@@ -52,6 +58,10 @@ type OpenAIStreamChoice struct {
 	Index        int               `json:"index"`
 	Delta        OpenAIStreamDelta `json:"delta"`
 	FinishReason *string           `json:"finish_reason"`
+
+	// Thinking metadata fields for Harmony parsing (optional, backward compatible)
+	ThinkingContent  *string           `json:"thinking_content,omitempty"`
+	HarmonyChannels  []parser.Channel  `json:"harmony_channels,omitempty"`
 }
 
 // OpenAIStreamDelta represents streaming delta content
