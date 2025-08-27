@@ -4,6 +4,7 @@ import (
 	"claude-proxy/config"
 	"claude-proxy/correction"
 	"claude-proxy/logger"
+	"claude-proxy/parser"
 	"claude-proxy/types"
 	"context"
 	"encoding/json"
@@ -622,71 +623,38 @@ func TransformOpenAIToAnthropic(ctx context.Context, resp *types.OpenAIResponse,
 
 	choice := resp.Choices[0]
 
-	// Convert content
-	var content []types.Content
-
-	// Add text content if present
-	if choice.Message.Content != "" {
-		content = append(content, types.Content{
-			Type: "text",
-			Text: choice.Message.Content,
-		})
-	}
-
-	// Add tool calls if present
-	for _, toolCall := range choice.Message.ToolCalls {
-		// Parse arguments back to map
-		var args map[string]interface{}
-		if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &args); err != nil {
-			loggerInstance.Warn("⚠️ Failed to parse tool arguments: %v", err)
-			args = make(map[string]interface{})
-		}
-
-		toolContent := types.Content{
-			Type:  "tool_use",
-			ID:    toolCall.ID,
-			Name:  toolCall.Function.Name,
-			Input: args,
-		}
-		content = append(content, toolContent)
-
-		loggerInstance.Debug("🔧 Tool call detected in OpenAI response: %s(id=%s) with args: %v",
-			toolCall.Function.Name, toolCall.ID, args)
-	}
-
-	// Determine stop reason
-	stopReason := "end_turn"
-	if choice.FinishReason != nil {
-		switch *choice.FinishReason {
-		case "tool_calls":
-			stopReason = "tool_use"
-		case "stop":
-			stopReason = "end_turn"
-		case "length":
-			stopReason = "max_tokens"
+	// ============================================================================
+	// HARMONY DETECTION AND PRE-PROCESSING (Stream B)
+	// ============================================================================
+	// Chain-of-responsibility pattern: attempt Harmony parsing first, 
+	// then fallback to existing transformation logic if not Harmony format
+	
+	if cfg.IsHarmonyParsingEnabled() && choice.Message.Content != "" {
+		if isHarmonyContent, harmonyChannels := detectHarmonyContent(ctx, choice.Message.Content, cfg, loggerInstance); isHarmonyContent {
+			// Content contains Harmony formatting - delegate to Stream C for response building
+			// This is the integration point where Stream C will build the response with thinking metadata
+			
+			if cfg.IsHarmonyDebugEnabled() {
+				loggerInstance.Debug("🔍 Harmony content detected, channels extracted: %d", len(harmonyChannels))
+				for i, channel := range harmonyChannels {
+					loggerInstance.Debug("🔍   Channel %d: type=%s, content_type=%s, content_len=%d", 
+						i, channel.Type, channel.ContentType, len(channel.Content))
+				}
+			}
+			
+			// Store channels in response for Stream C to process
+			// Note: Stream C will implement the actual response building logic
+			// that maps channels to appropriate response fields with thinking metadata
+			return buildHarmonyResponse(ctx, resp, choice, harmonyChannels, model, cfg, loggerInstance)
 		}
 	}
-
-	// Create Anthropic response
-	anthropicResp := &types.AnthropicResponse{
-		ID:           resp.ID,
-		Type:         "message",
-		Role:         "assistant",
-		Model:        model,
-		Content:      content,
-		StopReason:   stopReason,
-		StopSequence: nil,
-		Usage: types.Usage{
-			InputTokens:  resp.Usage.PromptTokens,
-			OutputTokens: resp.Usage.CompletionTokens,
-		},
-	}
-
-	// Log response transformation summary
-	loggerInstance.Debug("✅ Transformed response: %d content items, stop_reason: %s",
-		len(content), stopReason)
-
-	return anthropicResp, nil
+	
+	// ============================================================================
+	// STANDARD CONTENT CONVERSION (existing logic preserved)
+	// ============================================================================
+	// No Harmony content detected or Harmony parsing disabled - use existing transformation
+	
+	return buildStandardResponse(ctx, resp, choice, model, cfg, loggerInstance)
 }
 
 // shouldSkipExitPlanMode analyzes conversation context using LLM to determine if ExitPlanMode should be filtered out
@@ -750,4 +718,148 @@ func extractUserText(msg types.Message) string {
 		return strings.Join(texts, " ")
 	}
 	return ""
+}
+
+// ============================================================================
+// HARMONY DETECTION AND PARSING (Stream B Implementation)
+// ============================================================================
+
+// detectHarmonyContent implements chain-of-responsibility pattern for Harmony detection
+// Returns (isHarmony, channels) tuple where isHarmony indicates if content contains
+// Harmony formatting and channels contains the extracted channel data
+func detectHarmonyContent(ctx context.Context, content string, cfg *config.Config, logger logger.Logger) (bool, []parser.Channel) {
+	// Fast detection first - optimize for performance on non-Harmony content
+	if !parser.IsHarmonyFormat(content) {
+		if cfg.IsHarmonyDebugEnabled() {
+			logger.Debug("🔍 No Harmony tokens detected in content")
+		}
+		return false, nil
+	}
+	
+	// Harmony tokens detected - perform full parsing
+	if cfg.IsHarmonyDebugEnabled() {
+		logger.Debug("🔍 Harmony tokens detected, performing full extraction")
+	}
+	
+	channels := parser.ExtractChannels(content)
+	
+	// Validate extraction results
+	if len(channels) == 0 {
+		if cfg.IsHarmonyDebugEnabled() {
+			logger.Debug("🔍 Harmony tokens found but no channels extracted - treating as non-Harmony")
+		}
+		return false, nil
+	}
+	
+	// Log extraction summary
+	if cfg.IsHarmonyDebugEnabled() {
+		thinkingChannels := 0
+		responseChannels := 0
+		toolCallChannels := 0
+		
+		for _, channel := range channels {
+			switch {
+			case channel.IsThinking():
+				thinkingChannels++
+			case channel.IsResponse():
+				responseChannels++
+			case channel.IsToolCall():
+				toolCallChannels++
+			}
+		}
+		
+		logger.Debug("🔍 Harmony extraction complete: %d total channels (thinking=%d, response=%d, tools=%d)", 
+			len(channels), thinkingChannels, responseChannels, toolCallChannels)
+	}
+	
+	return true, channels
+}
+
+// buildHarmonyResponse is a placeholder for Stream C implementation
+// This function will be implemented by Stream C to build responses with thinking metadata
+// using the extended types from Issue #3
+func buildHarmonyResponse(ctx context.Context, resp *types.OpenAIResponse, choice types.OpenAIChoice, channels []parser.Channel, model string, cfg *config.Config, logger logger.Logger) (*types.AnthropicResponse, error) {
+	// PLACEHOLDER FOR STREAM C IMPLEMENTATION
+	// Stream C will implement this function to:
+	// 1. Map analysis channels to thinking metadata
+	// 2. Map final channels to main response content  
+	// 3. Handle commentary channels for tool calls
+	// 4. Use extended AnthropicResponse and OpenAIChoice types from Issue #3
+	
+	logger.Debug("🔄 buildHarmonyResponse called - Stream C implementation needed")
+	logger.Debug("🔄 Channels to process: %d", len(channels))
+	
+	// Temporary fallback to standard transformation for development
+	// This will be replaced by Stream C with proper Harmony response building
+	return buildStandardResponse(ctx, resp, choice, model, cfg, logger)
+}
+
+// buildStandardResponse handles non-Harmony content using existing transformation logic
+// This preserves the original transformation behavior for non-Harmony responses
+func buildStandardResponse(ctx context.Context, resp *types.OpenAIResponse, choice types.OpenAIChoice, model string, cfg *config.Config, logger logger.Logger) (*types.AnthropicResponse, error) {
+	// Convert content using existing logic
+	var content []types.Content
+
+	// Add text content if present
+	if choice.Message.Content != "" {
+		content = append(content, types.Content{
+			Type: "text",
+			Text: choice.Message.Content,
+		})
+	}
+
+	// Add tool calls if present
+	for _, toolCall := range choice.Message.ToolCalls {
+		// Parse arguments back to map
+		var args map[string]interface{}
+		if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &args); err != nil {
+			logger.Warn("⚠️ Failed to parse tool arguments: %v", err)
+			args = make(map[string]interface{})
+		}
+
+		toolContent := types.Content{
+			Type:  "tool_use",
+			ID:    toolCall.ID,
+			Name:  toolCall.Function.Name,
+			Input: args,
+		}
+		content = append(content, toolContent)
+
+		logger.Debug("🔧 Tool call detected in OpenAI response: %s(id=%s) with args: %v",
+			toolCall.Function.Name, toolCall.ID, args)
+	}
+
+	// Determine stop reason
+	stopReason := "end_turn"
+	if choice.FinishReason != nil {
+		switch *choice.FinishReason {
+		case "tool_calls":
+			stopReason = "tool_use"
+		case "stop":
+			stopReason = "end_turn"
+		case "length":
+			stopReason = "max_tokens"
+		}
+	}
+
+	// Create Anthropic response
+	anthropicResp := &types.AnthropicResponse{
+		ID:           resp.ID,
+		Type:         "message",
+		Role:         "assistant",
+		Model:        model,
+		Content:      content,
+		StopReason:   stopReason,
+		StopSequence: nil,
+		Usage: types.Usage{
+			InputTokens:  resp.Usage.PromptTokens,
+			OutputTokens: resp.Usage.CompletionTokens,
+		},
+	}
+
+	// Log response transformation summary
+	logger.Debug("✅ Transformed response: %d content items, stop_reason: %s",
+		len(content), stopReason)
+
+	return anthropicResp, nil
 }
