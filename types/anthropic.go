@@ -2,7 +2,22 @@ package types
 
 import "strings"
 
-// AnthropicRequest represents incoming request from Claude Code
+// AnthropicRequest represents a complete incoming request from Claude Code to the
+// proxy service, containing all necessary information for model routing and processing.
+//
+// This struct serves as the primary input structure for the proxy transformation
+// pipeline, containing messages, tools, system instructions, and request parameters
+// in Anthropic's native format before conversion to provider-specific formats.
+//
+// The request structure supports:
+//   - Multi-turn conversations through the Messages field
+//   - Tool/function calling capabilities through the Tools field
+//   - System-level instructions through the System field
+//   - Streaming and non-streaming response modes
+//   - Token limit controls through MaxTokens
+//
+// AnthropicRequest is designed to be compatible with Anthropic's official API
+// specification while supporting proxy-specific enhancements and routing logic.
 type AnthropicRequest struct {
 	Model     string          `json:"model"`
 	Messages  []Message       `json:"messages"`
@@ -12,7 +27,25 @@ type AnthropicRequest struct {
 	Stream    bool            `json:"stream,omitempty"`
 }
 
-// AnthropicResponse represents response to Claude Code
+// AnthropicResponse represents a complete response from the proxy service back to
+// Claude Code, formatted according to Anthropic's API specification with optional
+// Harmony parsing enhancements.
+//
+// This struct serves as the final output of the proxy transformation pipeline,
+// containing the processed response from the underlying provider converted back
+// to Anthropic format, along with usage statistics and metadata.
+//
+// The response structure includes:
+//   - Standard Anthropic response fields (ID, Type, Role, Model, Content)
+//   - Completion metadata (StopReason, StopSequence, Usage)
+//   - Harmony parsing extensions (ThinkingContent, HarmonyChannels)
+//
+// Harmony parsing metadata (Issue #4):
+//   - ThinkingContent: Consolidated thinking text from analysis channels
+//   - HarmonyChannels: Channel metadata for debugging and validation
+//
+// The Harmony extensions enable Claude Code to provide enhanced UI experiences
+// with separate thinking and response content sections.
 type AnthropicResponse struct {
 	ID           string    `json:"id"`
 	Type         string    `json:"type"`
@@ -22,21 +55,68 @@ type AnthropicResponse struct {
 	StopReason   string    `json:"stop_reason"`
 	StopSequence *string   `json:"stop_sequence"`
 	Usage        Usage     `json:"usage"`
+	
+	// Harmony parsing metadata (Issue #4)
+	ThinkingContent string            `json:"thinking_content,omitempty"` // Consolidated thinking text from analysis channels
+	HarmonyChannels []HarmonyChannel  `json:"harmony_channels,omitempty"` // Channel metadata for debugging
 }
 
-// Message represents a chat message
+// Message represents a single message within a conversation, supporting both
+// simple text content and complex multi-part content structures.
+//
+// Messages form the core of conversation history in Claude Code interactions,
+// with each message having a role identifier and content that can be either:
+//   - Simple string content for basic text messages
+//   - Complex Content slice for multi-part messages with text and tool interactions
+//
+// The flexible content structure enables support for:
+//   - Plain text messages
+//   - Tool use requests and responses
+//   - Mixed content types within a single message
+//   - Future content type extensions
+//
+// Role values follow standard chat completion conventions:
+// "user", "assistant", "system", "tool", "developer".
 type Message struct {
 	Role    string      `json:"role"`
 	Content interface{} `json:"content"` // Can be string or []Content
 }
 
-// SystemContent represents system message content
+// SystemContent represents structured system-level instructions or context
+// provided to the model, following Anthropic's system message specification.
+//
+// System content provides instructions, context, or behavioral guidance that
+// influences the model's responses without being part of the conversation
+// history. Each SystemContent entry has a type identifier and text content.
+//
+// The structured format enables:
+//   - Multiple system instruction types
+//   - Modular system message composition
+//   - Type-specific processing and validation
+//   - Future extension with additional content types
+//
+// Typically, the Type field is "text" for standard system instructions.
 type SystemContent struct {
 	Type string `json:"type"`
 	Text string `json:"text"`
 }
 
-// Content represents message content (text or tool_use)
+// Content represents individual content blocks within messages, supporting
+// text content, tool use requests, and tool result responses.
+//
+// Content blocks enable rich, multi-part messages that can contain:
+//   - Text content for human-readable responses
+//   - Tool use requests with function calls and parameters
+//   - Tool result responses with execution outcomes
+//
+// The flexible structure supports Anthropic's content block specification:
+//   - Type field identifies the content block type
+//   - Text field contains human-readable content
+//   - Tool use fields (ID, Name, Input) specify function calls
+//   - Tool result field (ToolUseID) links results to requests
+//
+// This structure enables complex multi-turn tool interactions while maintaining
+// compatibility with simple text-only conversations.
 type Content struct {
 	Type string `json:"type"`
 	Text string `json:"text,omitempty"`
@@ -50,40 +130,142 @@ type Content struct {
 	ToolUseID string `json:"tool_use_id,omitempty"`
 }
 
-// Tool represents an Anthropic tool definition
+// Tool represents a complete tool/function definition in Anthropic format,
+// providing all information necessary for the model to understand and use
+// the tool appropriately.
+//
+// Tool definitions enable function calling capabilities by providing:
+//   - Name: Unique identifier for the tool
+//   - Description: Human-readable explanation of tool purpose and behavior
+//   - InputSchema: JSON Schema defining required and optional parameters
+//
+// The tool definition structure follows Anthropic's tool calling specification,
+// ensuring compatibility with Claude's function calling capabilities while
+// supporting proxy-specific tool filtering and description overrides.
+//
+// Tools are used by the model to determine when and how to call functions,
+// with the InputSchema providing validation for tool call parameters.
 type Tool struct {
 	Name        string     `json:"name"`
 	Description string     `json:"description"`
 	InputSchema ToolSchema `json:"input_schema"`
 }
 
-// ToolSchema represents tool parameter schema
+// ToolSchema represents a JSON Schema definition for tool parameters,
+// providing structured validation and documentation for tool inputs.
+//
+// The schema follows standard JSON Schema conventions:
+//   - Type: Schema type (typically "object" for tool parameters)
+//   - Properties: Map of parameter names to their property definitions
+//   - Required: Array of required parameter names
+//
+// This structure enables:
+//   - Parameter validation before tool execution
+//   - Auto-generated documentation for tools
+//   - IDE support and auto-completion for tool calls
+//   - Type safety in tool parameter handling
+//
+// The schema is used both by the model for understanding tool requirements
+// and by the proxy for validating tool call parameters before forwarding.
 type ToolSchema struct {
 	Type       string                  `json:"type"`
 	Properties map[string]ToolProperty `json:"properties"`
 	Required   []string                `json:"required"`
 }
 
+// ToolProperty represents an individual parameter definition within a tool schema,
+// providing detailed specification for tool input validation and documentation.
+//
+// Each property defines:
+//   - Type: Data type (string, number, boolean, array, object)
+//   - Description: Human-readable parameter explanation
+//   - Items: Schema for array element types (when Type is "array")
+//
+// ToolProperty enables rich parameter definitions that support complex data types
+// and nested structures while providing clear documentation for tool usage.
 type ToolProperty struct {
 	Type        string               `json:"type"`
 	Description string               `json:"description,omitempty"`
 	Items       *ToolPropertyItems   `json:"items,omitempty"`
 }
 
-// ToolPropertyItems represents array item schema for tool properties
+// ToolPropertyItems represents the schema definition for elements within
+// array-type tool properties, enabling validation of array contents.
+//
+// This struct provides the element type specification for array parameters,
+// ensuring that array contents conform to expected data types and structures.
+//
+// The Type field specifies the data type for all elements in the array,
+// supporting primitive types (string, number, boolean) and complex types
+// (object, array) for nested data structures.
 type ToolPropertyItems struct {
 	Type string `json:"type"`
 }
 
-// Usage represents token usage
+// Usage represents detailed token consumption statistics for a request/response
+// cycle, providing billing and performance monitoring information.
+//
+// Token usage tracking includes:
+//   - InputTokens: Tokens consumed by the input prompt and context
+//   - OutputTokens: Tokens generated in the response
+//
+// This information enables:
+//   - Cost calculation and billing
+//   - Performance monitoring and optimization
+//   - Rate limiting and quota management
+//   - Usage analytics and reporting
+//
+// Usage statistics are typically provided by the underlying model provider
+// and passed through to Claude Code for display and monitoring.
 type Usage struct {
 	InputTokens  int `json:"input_tokens"`
 	OutputTokens int `json:"output_tokens"`
 }
 
-// GetFallbackToolSchema provides accurate schemas for Claude Code tools when restoration fails
-// This prevents "Unknown tool" errors when LLM generates tool calls for valid Claude Code tools
-// that weren't included in the original request's tool list
+// GetFallbackToolSchema provides comprehensive fallback tool definitions for
+// Claude Code's standard toolkit, preventing "Unknown tool" errors when the
+// model generates tool calls for valid tools not included in the original request.
+//
+// This function serves as a critical safety net in the proxy's tool handling
+// pipeline, ensuring that tool calls for valid Claude Code tools can be processed
+// even when tool restoration from the original request fails or is incomplete.
+//
+// The function maintains complete, accurate schemas for all standard Claude Code tools:
+//   - WebSearch: Web search with domain filtering
+//   - Read: File system access and content reading
+//   - Write: File creation and modification
+//   - Edit: Precise string replacement in files
+//   - Bash: Shell command execution
+//   - Grep: Advanced pattern searching
+//   - Glob: File pattern matching
+//   - LS: Directory listing
+//   - Task: Agent task delegation
+//   - TodoWrite: Task management and tracking
+//   - WebFetch: URL content fetching and processing
+//   - MultiEdit: Batch file editing operations
+//   - ExitPlanMode: Planning workflow control
+//
+// Parameters:
+//   - toolName: The name of the tool to retrieve (case-insensitive)
+//
+// Returns:
+//   - A complete Tool struct with accurate schema for the specified tool
+//   - nil if the tool name is not recognized
+//
+// Performance: O(1) constant time lookup with switch statement.
+//
+// Usage:
+// This function is typically called by the correction service when a tool
+// call cannot be validated against the original request's tool list, providing
+// a fallback mechanism to maintain tool call functionality.
+//
+// Example:
+//
+//	tool := GetFallbackToolSchema("WebSearch")
+//	if tool != nil {
+//		// Use tool schema for validation or correction
+//		validateToolCall(toolCall, tool.InputSchema)
+//	}
 func GetFallbackToolSchema(toolName string) *Tool {
 	// Complete coverage of Claude Code tools to prevent "Unknown tool" errors
 	switch strings.ToLower(toolName) {
