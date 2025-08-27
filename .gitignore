@@ -2,3 +2,4 @@ observability/logs/*.jsonl
 logs/*.jsonl
 .env
 simple-proxy
+simple-proxy
