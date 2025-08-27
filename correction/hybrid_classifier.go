@@ -37,7 +37,7 @@ func NewHybridClassifier() *HybridClassifier {
 		"create": true, "make": true, "build": true, "write": true, "add": true,
 		"implement": true, "install": true, "setup": true, "configure": true,
 		"edit": true, "modify": true, "update": true, "change": true,
-		"fix": true, "correct": true, "repair": true, "patch": true,
+		"fix": true, "correct": true, "repair": true, "patch": true, "debug": true,
 		"run": true, "execute": true, "launch": true, "start": true,
 		"delete": true, "remove": true, "clean": true, "clear": true,
 		"document": true, "doc": true, "readme": true, // Documentation verbs
@@ -45,7 +45,7 @@ func NewHybridClassifier() *HybridClassifier {
 		"creating": true, "making": true, "building": true, "writing": true, "adding": true,
 		"implementing": true, "installing": true, "setting": true, "configuring": true,
 		"editing": true, "modifying": true, "updating": true, "changing": true,
-		"fixing": true, "correcting": true, "repairing": true, "patching": true,
+		"fixing": true, "correcting": true, "repairing": true, "patching": true, "debugging": true,
 		"running": true, "executing": true, "launching": true, "starting": true,
 		"deleting": true, "removing": true, "cleaning": true, "clearing": true,
 		"documenting": true, "docs": true, // Documentation -ing forms
@@ -62,9 +62,9 @@ func NewHybridClassifier() *HybridClassifier {
 	// Strong implementation verbs that almost always require tools
 	strongVerbs := map[string]bool{
 		"create": true, "write": true, "edit": true, "update": true,
-		"fix": true, "implement": true, "build": true, "run": true,
+		"fix": true, "implement": true, "build": true, "run": true, "debug": true,
 		"creating": true, "writing": true, "editing": true, "updating": true,
-		"fixing": true, "implementing": true, "building": true, "running": true,
+		"fixing": true, "implementing": true, "building": true, "running": true, "debugging": true,
 	}
 
 	// File pattern regex to detect file references
@@ -545,7 +545,10 @@ func (h *HybridClassifier) detectContextualNegation(content string) bool {
 		"explain what",
 		"describe what",
 		"tell me what",
-		"show me what",
+		"show me what happens",
+		"show me what would",
+		"show me what this",
+		"show me what the",
 		"without actually",
 		"but don't",
 		"don't actually",

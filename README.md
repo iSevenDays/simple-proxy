@@ -2,21 +2,38 @@
 
 A Claude Code proxy that transforms Anthropic API requests to OpenAI-compatible format.
 
-## Development Commands
+## API Endpoints
 
-### Log Processing
+- `GET /` - Service information and status
+- `GET /health` - Health check endpoint  
+- `POST /v1/messages` - Anthropic-compatible chat completions
+- `GET /metrics` - Prometheus metrics endpoint
 
-To pretty-format existing log files (JSON Lines format):
+**Default Port**: 3456
+
+## Observability
+
+Simple-proxy sends structured logs directly to **Loki** via HTTP for real-time monitoring.
+
+### Configuration
 
 ```bash
-# Pretty-format and overwrite log file
-jq . logs/conversation-*.log > temp.json && mv temp.json logs/conversation-*.log
+# Set Loki endpoint (default: http://localhost:3100)
+export LOKI_URL="http://localhost:3100"
 
-# Pretty-format specific log file
-jq . logs/conversation-session_54000-20250810-180539.log > pretty.json && mv pretty.json logs/conversation-session_54000-20250810-180539.log
-
-# Pretty-format all log files in place
-for log in logs/*.log; do jq . "$log" > temp.json && mv temp.json "$log"; done
+# Start simple-proxy with direct Loki logging
+./simple-proxy
 ```
 
-Note: New logs are automatically pretty-formatted as of the latest update.
+### Viewing Logs
+
+- **Grafana**: http://localhost:3000 (admin/admin)
+- **Loki API**: Query logs with `{job="simple-proxy"}`
+
+### Log Format
+
+Structured JSON logs include:
+- `timestamp`, `level`, `message`
+- `service="simple-proxy"`, `component`, `category`
+- `request_id` for request tracing
+- Custom fields for circuit breaker, tool correction, etc.

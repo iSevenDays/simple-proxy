@@ -6,7 +6,9 @@
       "Bash(find:*)",
       "Bash(go:*)",
       "Bash(sed:*)",
-      "Bash(awk:*)"
+      "Bash(awk:*)",
+      "WebSearch",
+      "Bash(git add:*)"
     ],
     "deny": []
   }

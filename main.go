@@ -4,12 +4,33 @@ import (
 	"claude-proxy/config"
 	"claude-proxy/logger"
 	"claude-proxy/proxy"
+	"context"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
+
+// Simple logger config implementation
+type simpleLoggerConfig struct {
+	minLevel    logger.Level
+	maskAPIKeys bool
+}
+
+func (s *simpleLoggerConfig) ShouldLogForModel(model string) bool {
+	return true // Log for all models
+}
+
+func (s *simpleLoggerConfig) GetMinLogLevel() logger.Level {
+	return s.minLevel
+}
+
+func (s *simpleLoggerConfig) ShouldMaskAPIKeys() bool {
+	return s.maskAPIKeys
+}
 
 func main() {
 	// Load configuration with .env support
@@ -18,19 +39,27 @@ func main() {
 		log.Fatalf("Failed to load config: %v", err)
 	}
 
-	// Initialize observability logger for structured Loki ingestion
-	logDir := os.Getenv("LOG_DIR")
-	if logDir == "" {
-		logDir = "./observability/logs" // Default to observability directory
+	// Initialize direct Loki HTTP logging
+	lokiURL := os.Getenv("LOKI_URL")
+	if lokiURL == "" {
+		lokiURL = "http://localhost:3100"
 	}
-	obsLogger, err := logger.NewObservabilityLogger(logDir)
+	
+	// Create a simple config adapter
+	loggerCfg := &simpleLoggerConfig{
+		minLevel:    logger.INFO,
+		maskAPIKeys: true,
+	}
+	
+	lokiLogger, err := logger.NewLokiLogger(context.Background(), loggerCfg, lokiURL)
 	if err != nil {
-		fmt.Printf("Warning: Failed to initialize observability logger: %v (continuing with fallback logging)\n", err)
-	} else {
-		defer obsLogger.Close()
-		// Set observability logger on config for structured logging
-		cfg.SetObservabilityLogger(obsLogger)
+		log.Fatalf("Failed to initialize Loki logger: %v", err)
 	}
+	
+	// Wrap for config interface compatibility
+	obsLogger := &logger.LokiObservabilityLogger{LokiLogger: lokiLogger.(*logger.LokiLogger)}
+	cfg.SetObservabilityLogger(obsLogger)
+	fmt.Printf("✅ Direct Loki logging enabled at %s\n", lokiURL)
 
 	if obsLogger != nil {
 		obsLogger.Info(logger.ComponentProxy, logger.CategoryRequest, "", "Claude Code Proxy configuration loaded", map[string]interface{}{
@@ -56,33 +85,40 @@ func main() {
 		})
 	}
 
-	// Initialize conversation logger if enabled
-	var conversationLogger *logger.ConversationLogger
-	if cfg.ConversationLoggingEnabled {
-		logLevel := logger.ParseLevel(cfg.ConversationLogLevel)
-		conversationLogger, err = logger.NewConversationLogger("logs", logLevel, cfg.ConversationMaskSensitive, cfg.ConversationLogFullTools, cfg.ConversationTruncation)
-		if err != nil {
+	// Initialize conversation session ID if conversation logging enabled
+	var conversationSessionID string
+	if cfg.ConversationLoggingEnabled && obsLogger != nil {
+		conversationSessionID = fmt.Sprintf("session_%d", time.Now().UnixNano()%100000)
+		
+		// Log conversation session start
+		obsLogger.LokiLogger.WithField("event", "session_start").
+			WithField("session_id", conversationSessionID).
+			WithField("category", "session").
+			Info("📋 Conversation session started")
+		
+		obsLogger.Info(logger.ComponentProxy, logger.CategoryRequest, "", "Conversation logging initialized", map[string]interface{}{
+			"level": cfg.ConversationLogLevel,
+			"session_id": conversationSessionID,
+		})
+		
+		defer func() {
 			if obsLogger != nil {
-				obsLogger.Error(logger.ComponentProxy, logger.CategoryError, "", "Failed to initialize conversation logger", map[string]interface{}{"error": err.Error()})
+				obsLogger.LokiLogger.WithField("event", "session_end").
+					WithField("session_id", conversationSessionID).
+					WithField("category", "session").
+					Info("📋 Conversation session ended")
 			}
-			log.Fatalf("Failed to initialize conversation logger: %v", err)
-		}
-		if obsLogger != nil {
-			obsLogger.Info(logger.ComponentProxy, logger.CategoryRequest, "", "Conversation logging initialized", map[string]interface{}{
-				"level": cfg.ConversationLogLevel,
-				"session_id": conversationLogger.GetSessionID(),
-			})
-		}
-		defer conversationLogger.Close()
+		}()
 	}
 
-	// Create proxy handler
-	proxyHandler := proxy.NewHandler(cfg, conversationLogger, obsLogger)
+	// Create proxy handler  
+	proxyHandler := proxy.NewHandler(cfg, obsLogger, conversationSessionID)
 
 	// Setup HTTP routes
 	http.HandleFunc("/", handleRoot)
 	http.HandleFunc("/health", handleHealth)
 	http.HandleFunc("/v1/messages", proxyHandler.HandleAnthropicRequest)
+	http.Handle("/metrics", promhttp.Handler())
 
 	// Setup HTTP server with reasonable timeouts
 	server := &http.Server{

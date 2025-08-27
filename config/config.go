@@ -49,6 +49,9 @@ type Config struct {
 	// Connection timeout settings
 	DefaultConnectionTimeout int `json:"default_connection_timeout"` // Connection timeout in seconds for all endpoints
 
+	// Tool choice correction and necessity detection
+	EnableToolChoiceCorrection bool `json:"enable_tool_choice_correction"` // Enable tool choice correction and necessity detection
+
 	// System message overrides (loaded from system_overrides.yaml)
 	SystemMessageOverrides SystemMessageOverrides `json:"system_message_overrides"`
 
@@ -132,6 +135,7 @@ func GetDefaultConfig() *Config {
 		ConversationLoggingEnabled:   false,                    // Disabled by default
 		ConversationLogLevel:         "INFO",                   // Default to INFO level
 		ConversationMaskSensitive:    true,                     // Enable sensitive data masking by default
+		EnableToolChoiceCorrection:   false,                    // Disable tool choice correction by default
 		SystemMessageOverrides:       SystemMessageOverrides{}, // Empty by default
 		BigModel:                     "",                       // Will be set from .env
 		SmallModel:                   "",                       // Will be set from .env
@@ -166,10 +170,11 @@ func LoadConfigWithEnv() (*Config, error) {
 		ConversationLoggingEnabled: false,                    // Disabled by default
 		ConversationLogLevel:       "INFO",                   // Default to INFO level
 		ConversationMaskSensitive:  true,                     // Enable sensitive data masking by default
-		ConversationLogFullTools:   false,                    // Log tool names only by default
-		ConversationTruncation:     0,                        // No truncation by default
-		DefaultConnectionTimeout:   30,                       // 30 seconds default connection timeout
-		SystemMessageOverrides:     SystemMessageOverrides{}, // Empty by default
+		ConversationLogFullTools:     false,                    // Log tool names only by default
+		ConversationTruncation:       0,                        // No truncation by default
+		DefaultConnectionTimeout:     30,                       // 30 seconds default connection timeout
+		EnableToolChoiceCorrection:   false,                    // Disable tool choice correction by default
+		SystemMessageOverrides:       SystemMessageOverrides{}, // Empty by default
 		HealthManager:              circuitbreaker.NewHealthManager(circuitbreaker.DefaultConfig()),
 	}
 
@@ -520,6 +525,23 @@ func LoadConfigWithEnv() (*Config, error) {
 		cfg.logInfo("configuration", "request", "", "Using default DEFAULT_CONNECTION_TIMEOUT", map[string]interface{}{
 			"timeout_seconds": 30,
 		})
+	}
+
+	// Parse ENABLE_TOOL_CHOICE_CORRECTION (optional, defaults to false)
+	if enableToolChoiceCorrection, exists := envVars["ENABLE_TOOL_CHOICE_CORRECTION"]; exists {
+		if enableToolChoiceCorrection == "true" || enableToolChoiceCorrection == "1" {
+			cfg.EnableToolChoiceCorrection = true
+			cfg.logInfo("configuration", "request", "", "Configured ENABLE_TOOL_CHOICE_CORRECTION", map[string]interface{}{
+				"enabled": true,
+				"description": "tool choice correction enabled",
+			})
+		} else {
+			cfg.EnableToolChoiceCorrection = false
+			cfg.logInfo("configuration", "request", "", "Configured ENABLE_TOOL_CHOICE_CORRECTION", map[string]interface{}{
+				"enabled": false,
+				"description": "tool choice correction disabled",
+			})
+		}
 	}
 
 	// Load tool description overrides from YAML file
@@ -881,6 +903,11 @@ func (c *Config) GetHealthyToolCorrectionEndpoint() string {
 		})
 	}
 	return endpoint
+}
+
+// GetEnableToolChoiceCorrection returns whether tool choice correction is enabled
+func (c *Config) GetEnableToolChoiceCorrection() bool {
+	return c.EnableToolChoiceCorrection
 }
 
 // MarkEndpointFailed moves to the next endpoint when the current one fails

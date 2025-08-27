@@ -22,13 +22,13 @@ type Handler struct {
 	config             *config.Config
 	correctionService  *correction.Service
 	loggerConfig       logger.LoggerConfig
-	conversationLogger *logger.ConversationLogger
+	conversationSessionID string
 	loopDetector       *loop.LoopDetector
 	obsLogger          *logger.ObservabilityLogger
 }
 
 // NewHandler creates a new proxy handler
-func NewHandler(cfg *config.Config, conversationLogger *logger.ConversationLogger, obsLogger *logger.ObservabilityLogger) *Handler {
+func NewHandler(cfg *config.Config, obsLogger *logger.ObservabilityLogger, conversationSessionID string) *Handler {
 	return &Handler{
 		config: cfg,
 		correctionService: correction.NewService(
@@ -39,10 +39,10 @@ func NewHandler(cfg *config.Config, conversationLogger *logger.ConversationLogge
 			cfg.DisableToolCorrectionLogging,
 			obsLogger,
 		),
-		loggerConfig:       logger.NewConfigAdapter(cfg),
-		conversationLogger: conversationLogger,
-		loopDetector:       loop.NewLoopDetector(),
-		obsLogger:          obsLogger,
+		loggerConfig:         logger.NewConfigAdapter(cfg),
+		conversationSessionID: conversationSessionID,
+		loopDetector:         loop.NewLoopDetector(),
+		obsLogger:           obsLogger,
 	}
 }
 
@@ -87,8 +87,8 @@ func (h *Handler) HandleAnthropicRequest(w http.ResponseWriter, r *http.Request)
 	loggerInstance := logger.New(ctx, h.loggerConfig)
 
 	// Log conversation if enabled
-	if h.conversationLogger != nil {
-		h.conversationLogger.LogRequest(ctx, requestID, anthropicReq)
+	if h.obsLogger != nil && h.conversationSessionID != "" {
+		h.obsLogger.LokiLogger.LogRequest(ctx, requestID, h.conversationSessionID, anthropicReq)
 	}
 
 	originalModel := anthropicReq.Model
@@ -130,8 +130,8 @@ func (h *Handler) HandleAnthropicRequest(w http.ResponseWriter, r *http.Request)
 			loggerInstance.Info("🔄 Breaking loop with recommendation: %s", detection.Recommendation)
 
 			// Log conversation loop if enabled
-			if h.conversationLogger != nil {
-				h.conversationLogger.LogCorrection(ctx, requestID, nil, nil, fmt.Sprintf("loop_detection_%s_%s_%d", detection.LoopType, detection.ToolName, detection.Count))
+			if h.obsLogger != nil && h.conversationSessionID != "" {
+				h.obsLogger.LokiLogger.LogCorrection(ctx, requestID, h.conversationSessionID, nil, nil, fmt.Sprintf("loop_detection_%s_%s_%d", detection.LoopType, detection.ToolName, detection.Count))
 			}
 
 			// Return loop-breaking response immediately
@@ -365,8 +365,8 @@ func (h *Handler) HandleAnthropicRequest(w http.ResponseWriter, r *http.Request)
 			}
 
 			// Log conversation correction if enabled
-			if h.conversationLogger != nil && changesDetected {
-				h.conversationLogger.LogCorrection(ctx, requestID, originalContent, correctedContent, "tool_correction")
+			if h.obsLogger != nil && h.conversationSessionID != "" && changesDetected {
+				h.obsLogger.LokiLogger.LogCorrection(ctx, requestID, h.conversationSessionID, originalContent, correctedContent, "tool_correction")
 			}
 
 			anthropicResp.Content = correctedContent
@@ -385,16 +385,16 @@ func (h *Handler) HandleAnthropicRequest(w http.ResponseWriter, r *http.Request)
 			logger.LogToolUsed(ctx, modelLogger, content.Name, content.ID)
 
 			// Log conversation tool call if enabled
-			if h.conversationLogger != nil {
-				h.conversationLogger.LogToolCall(ctx, requestID, content.Name, content.Input, nil) // Result will be from next request
+			if h.obsLogger != nil && h.conversationSessionID != "" {
+				h.obsLogger.LokiLogger.LogToolCall(ctx, requestID, h.conversationSessionID, content.Name, content.Input, nil) // Result will be from next request
 			}
 		}
 	}
 	logger.LogResponseSummary(ctx, modelLogger, textItemCount, toolCallCount, anthropicResp.StopReason)
 
 	// Log conversation response if enabled
-	if h.conversationLogger != nil {
-		h.conversationLogger.LogResponse(ctx, requestID, anthropicResp)
+	if h.obsLogger != nil && h.conversationSessionID != "" {
+		h.obsLogger.LokiLogger.LogResponse(ctx, requestID, h.conversationSessionID, anthropicResp)
 	}
 
 	// Send response - stream if client requested it

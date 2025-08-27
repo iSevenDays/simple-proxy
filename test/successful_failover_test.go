@@ -52,6 +52,10 @@ func (c *SuccessFailoverConfig) RecordEndpointSuccess(endpoint string) {
 	// Mock implementation - no-op for basic tests
 }
 
+func (c *SuccessFailoverConfig) GetEnableToolChoiceCorrection() bool {
+	return true // Enable for unit tests
+}
+
 func (c *SuccessFailoverConfig) GetCurrentIndex() int64 {
 	return atomic.LoadInt64(&c.index)
 }

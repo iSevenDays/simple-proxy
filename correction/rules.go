@@ -230,9 +230,9 @@ func (r *StrongVerbWithFileRule) Name() string  { return "StrongVerbWithFile" }
 func (r *StrongVerbWithFileRule) IsSatisfiedBy(pairs []ActionPair, messages []types.OpenAIMessage) (bool, RuleDecision) {
 	strongVerbs := map[string]bool{
 		"create": true, "write": true, "edit": true, "update": true,
-		"fix": true, "implement": true, "build": true, "run": true,
+		"fix": true, "implement": true, "build": true, "run": true, "debug": true,
 		"creating": true, "writing": true, "editing": true, "updating": true,
-		"fixing": true, "implementing": true, "building": true, "running": true,
+		"fixing": true, "implementing": true, "building": true, "running": true, "debugging": true,
 	}
 
 	for _, pair := range pairs {
@@ -342,16 +342,24 @@ func (r *StrongVerbWithoutArtifactRule) Name() string  { return "StrongVerbWitho
 func (r *StrongVerbWithoutArtifactRule) IsSatisfiedBy(pairs []ActionPair, messages []types.OpenAIMessage) (bool, RuleDecision) {
 	strongVerbs := map[string]bool{
 		"create": true, "write": true, "edit": true, "update": true,
-		"fix": true, "implement": true, "build": true, "run": true,
+		"fix": true, "implement": true, "build": true, "run": true, "debug": true,
 		"creating": true, "writing": true, "editing": true, "updating": true,
-		"fixing": true, "implementing": true, "building": true, "running": true,
+		"fixing": true, "implementing": true, "building": true, "running": true, "debugging": true,
 	}
 
 	for _, pair := range pairs {
 		if strongVerbs[pair.Verb] {
+			// Be confident for certain very strong verbs even without artifacts
+			confident := pair.Verb == "run" || pair.Verb == "running" || 
+						pair.Verb == "build" || pair.Verb == "building" ||
+						pair.Verb == "fix" || pair.Verb == "fixing" ||
+						pair.Verb == "create" || pair.Verb == "creating" ||
+						pair.Verb == "implement" || pair.Verb == "implementing" ||
+						pair.Verb == "update" || pair.Verb == "updating" ||
+						pair.Verb == "debug" || pair.Verb == "debugging"
 			return true, RuleDecision{
 				RequireTools: true,
-				Confident:    false, // Less confident without clear artifact
+				Confident:    confident,
 				Reason:       "Strong implementation verb '" + pair.Verb + "' detected",
 			}
 		}

@@ -43,19 +43,22 @@ type ConfigProvider interface {
 	GetHealthyToolCorrectionEndpoint() string
 	RecordEndpointFailure(endpoint string)
 	RecordEndpointSuccess(endpoint string)
+	// GetEnableToolChoiceCorrection returns whether tool choice correction is enabled
+	GetEnableToolChoiceCorrection() bool
 }
 
 // Service handles tool call correction using configurable model
 type Service struct {
-	config         ConfigProvider
-	apiKey         string
-	enabled        bool
-	modelName      string                      // Configurable model for corrections
-	disableLogging bool                        // Disable tool correction logging
-	validator      types.ToolValidator         // Injected tool validator
-	registry       types.SchemaRegistry        // Injected schema registry
-	classifier     *HybridClassifier           // Two-stage hybrid classifier for tool necessity
-	obsLogger      *logger.ObservabilityLogger // Structured logging
+	config                     ConfigProvider
+	apiKey                     string
+	enabled                    bool
+	modelName                  string                      // Configurable model for corrections
+	disableLogging             bool                        // Disable tool correction logging
+	enableToolChoiceCorrection bool                        // Enable tool choice correction and necessity detection
+	validator                  types.ToolValidator         // Injected tool validator
+	registry                   types.SchemaRegistry        // Injected schema registry
+	classifier                 *HybridClassifier           // Two-stage hybrid classifier for tool necessity
+	obsLogger                  *logger.ObservabilityLogger // Structured logging
 }
 
 // logInfo logs an info message with structured data if obsLogger is available
@@ -82,43 +85,46 @@ func (s *Service) logError(component, category, requestID, message string, field
 // NewService creates a new tool correction service with default components
 func NewService(config ConfigProvider, apiKey string, enabled bool, modelName string, disableLogging bool, obsLogger *logger.ObservabilityLogger) *Service {
 	return &Service{
-		config:         config,
-		apiKey:         apiKey,
-		enabled:        enabled,
-		modelName:      modelName,
-		disableLogging: disableLogging,
-		validator:      types.NewStandardToolValidator(),  // Default validator for backward compatibility
-		registry:       types.NewStandardSchemaRegistry(), // Default registry for backward compatibility
-		classifier:     NewHybridClassifier(),             // Two-stage hybrid classifier
-		obsLogger:      obsLogger,
+		config:                     config,
+		apiKey:                     apiKey,
+		enabled:                    enabled,
+		modelName:                  modelName,
+		disableLogging:             disableLogging,
+		enableToolChoiceCorrection: config.GetEnableToolChoiceCorrection(),
+		validator:                  types.NewStandardToolValidator(),  // Default validator for backward compatibility
+		registry:                   types.NewStandardSchemaRegistry(), // Default registry for backward compatibility
+		classifier:                 NewHybridClassifier(),             // Two-stage hybrid classifier
+		obsLogger:                  obsLogger,
 	}
 }
 
 // NewServiceWithValidator creates a new tool correction service with custom validator
 func NewServiceWithValidator(config ConfigProvider, apiKey string, enabled bool, modelName string, disableLogging bool, validator types.ToolValidator) *Service {
 	return &Service{
-		config:         config,
-		apiKey:         apiKey,
-		enabled:        enabled,
-		modelName:      modelName,
-		disableLogging: disableLogging,
-		validator:      validator,
-		registry:       types.NewStandardSchemaRegistry(), // Default registry
-		classifier:     NewHybridClassifier(),             // Two-stage hybrid classifier
+		config:                     config,
+		apiKey:                     apiKey,
+		enabled:                    enabled,
+		modelName:                  modelName,
+		disableLogging:             disableLogging,
+		enableToolChoiceCorrection: config.GetEnableToolChoiceCorrection(),
+		validator:                  validator,
+		registry:                   types.NewStandardSchemaRegistry(), // Default registry
+		classifier:                 NewHybridClassifier(),             // Two-stage hybrid classifier
 	}
 }
 
 // NewServiceWithComponents creates a new tool correction service with custom components
 func NewServiceWithComponents(config ConfigProvider, apiKey string, enabled bool, modelName string, disableLogging bool, validator types.ToolValidator, registry types.SchemaRegistry) *Service {
 	return &Service{
-		config:         config,
-		apiKey:         apiKey,
-		enabled:        enabled,
-		modelName:      modelName,
-		disableLogging: disableLogging,
-		validator:      validator,
-		registry:       registry,
-		classifier:     NewHybridClassifier(), // Two-stage hybrid classifier
+		config:                     config,
+		apiKey:                     apiKey,
+		enabled:                    enabled,
+		modelName:                  modelName,
+		disableLogging:             disableLogging,
+		enableToolChoiceCorrection: config.GetEnableToolChoiceCorrection(),
+		validator:                  validator,
+		registry:                   registry,
+		classifier:                 NewHybridClassifier(), // Two-stage hybrid classifier
 	}
 }
 
@@ -533,6 +539,17 @@ func (s *Service) DetectToolNecessity(ctx context.Context, messages []types.Open
 	}
 
 	requestID := getRequestID(ctx)
+
+	// Check if tool choice correction is disabled
+	if !s.enableToolChoiceCorrection {
+		if s.shouldLog() {
+			s.logInfo(logger.ComponentHybridClassifier, logger.CategoryClassification, requestID, "Tool choice correction disabled", map[string]interface{}{
+				"enabled": false,
+				"reason":  "ENABLE_TOOL_CHOICE_CORRECTION=false",
+			})
+		}
+		return false, nil
+	}
 
 	// Stage A & B: Use hybrid classifier for deterministic analysis with logging
 	decision := s.classifier.DetectToolNecessity(messages, s.logInfo, requestID)

@@ -46,6 +46,10 @@ func (m *MockConfigProviderWithRetry) RecordEndpointSuccess(endpoint string) {
 	// Mock implementation - no-op for basic tests
 }
 
+func (m *MockConfigProviderWithRetry) GetEnableToolChoiceCorrection() bool {
+	return true // Enable for unit tests
+}
+
 // TestSendCorrectionRequestRetryLogic tests that retry logic works correctly
 func TestSendCorrectionRequestRetryLogic(t *testing.T) {
 	// Test 1: First endpoint fails with timeout, second succeeds

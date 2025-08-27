@@ -45,6 +45,10 @@ func (c *SimpleRetryConfig) RecordEndpointSuccess(endpoint string) {
 	// Mock implementation - no-op for basic tests
 }
 
+func (c *SimpleRetryConfig) GetEnableToolChoiceCorrection() bool {
+	return true // Enable for unit tests
+}
+
 // TestBasicRetryFunctionality focuses on the core retry logic
 func TestBasicRetryFunctionality(t *testing.T) {
 	t.Run("BasicFailover", func(t *testing.T) {

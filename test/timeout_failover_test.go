@@ -54,6 +54,10 @@ func (c *TimeoutTestConfig) RecordEndpointSuccess(endpoint string) {
 	// Mock implementation - no-op for basic tests
 }
 
+func (c *TimeoutTestConfig) GetEnableToolChoiceCorrection() bool {
+	return true // Enable for unit tests
+}
+
 func (c *TimeoutTestConfig) GetCallCount(endpoint string) int {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()

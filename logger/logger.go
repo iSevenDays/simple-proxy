@@ -84,8 +84,15 @@ const (
 	loggerContextKey contextKey = "logger"
 )
 
-// New creates a new ContextLogger with the given config
+// New creates a new Logger - now returns LokiLogger for unified logging
 func New(ctx context.Context, config LoggerConfig) Logger {
+	// Try to create LokiLogger, fallback to ContextLogger if it fails
+	lokiLogger, err := NewLokiLogger(ctx, config, "")
+	if err == nil {
+		return lokiLogger
+	}
+	
+	// Fallback to stdout logger if Loki unavailable
 	return &ContextLogger{
 		ctx:    ctx,
 		config: config,

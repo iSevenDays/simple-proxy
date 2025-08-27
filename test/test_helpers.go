@@ -39,6 +39,10 @@ func (m *MockConfigProvider) RecordEndpointSuccess(endpoint string) {
 	// Mock implementation - no-op for basic tests
 }
 
+func (m *MockConfigProvider) GetEnableToolChoiceCorrection() bool {
+	return true // Enable for unit tests as requested
+}
+
 // NewMockConfigProvider creates a test-optimized config using real LLM endpoints 
 // For backward compatibility, accepts optional endpoint parameter (ignored)
 func NewMockConfigProvider(endpoint ...string) *config.Config {
@@ -51,6 +55,7 @@ func NewMockConfigProvider(endpoint ...string) *config.Config {
 			ToolCorrectionEndpoints: []string{"http://192.168.0.46:11434/v1/chat/completions", "http://192.168.0.50:11434/v1/chat/completions"},
 			ToolCorrectionAPIKey: "ollama",
 			CorrectionModel: "qwen2.5-coder:latest",
+			EnableToolChoiceCorrection: true, // Enable for unit tests
 			HealthManager: circuitbreaker.NewHealthManager(getTestCircuitBreakerConfig()),
 		}
 	}
@@ -76,6 +81,9 @@ func NewMockConfigProvider(endpoint ...string) *config.Config {
 	
 	// No tools skipped by default for testing
 	cfg.SkipTools = []string{}
+	
+	// FORCE ENABLE tool choice correction for unit tests regardless of .env file
+	cfg.EnableToolChoiceCorrection = true
 	
 	return cfg
 }

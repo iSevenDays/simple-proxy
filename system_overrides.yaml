@@ -19,4 +19,7 @@ systemMessageOverrides:
 #    You are an expert coding assistant with access to powerful tools.
 
   append: |
-    \n\nIMPORTANT FOR TASK AGENTS: When performing analysis or research tasks, you must use tools extensively (Read, Grep, Glob, etc.) to gather comprehensive information before providing your final response. Brief text-only responses indicate incomplete investigation.
+    
+    Reasoning: high
+    
+    IMPORTANT FOR TASK AGENTS (when inside a task): When performing analysis or research tasks, you must use tools extensively (Read, Grep, Glob, etc.) to gather comprehensive information before providing your final response. Brief text-only responses indicate incomplete investigation.
