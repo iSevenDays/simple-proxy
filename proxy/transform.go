@@ -775,23 +775,165 @@ func detectHarmonyContent(ctx context.Context, content string, cfg *config.Confi
 	return true, channels
 }
 
-// buildHarmonyResponse is a placeholder for Stream C implementation
-// This function will be implemented by Stream C to build responses with thinking metadata
-// using the extended types from Issue #3
+// buildHarmonyResponse builds responses with thinking metadata from parsed Harmony content
+// Maps analysis channels to thinking metadata, final channels to main response content,
+// and commentary channels to tool calls using the extended types from Issue #3
 func buildHarmonyResponse(ctx context.Context, resp *types.OpenAIResponse, choice types.OpenAIChoice, channels []parser.Channel, model string, cfg *config.Config, logger logger.Logger) (*types.AnthropicResponse, error) {
-	// PLACEHOLDER FOR STREAM C IMPLEMENTATION
-	// Stream C will implement this function to:
-	// 1. Map analysis channels to thinking metadata
-	// 2. Map final channels to main response content  
-	// 3. Handle commentary channels for tool calls
-	// 4. Use extended AnthropicResponse and OpenAIChoice types from Issue #3
+	logger.Debug("🎵 Building Harmony response with %d channels", len(channels))
 	
-	logger.Debug("🔄 buildHarmonyResponse called - Stream C implementation needed")
-	logger.Debug("🔄 Channels to process: %d", len(channels))
+	// Separate channels by content type
+	var thinkingChannels []parser.Channel
+	var responseChannels []parser.Channel
+	var toolCallChannels []parser.Channel
+	var regularContent []types.Content
 	
-	// Temporary fallback to standard transformation for development
-	// This will be replaced by Stream C with proper Harmony response building
-	return buildStandardResponse(ctx, resp, choice, model, cfg, logger)
+	for _, channel := range channels {
+		switch {
+		case channel.IsThinking():
+			thinkingChannels = append(thinkingChannels, channel)
+			logger.Debug("🎵   Analysis channel: type=%s, content_len=%d", channel.Type, len(channel.Content))
+		case channel.IsResponse():
+			responseChannels = append(responseChannels, channel)
+			logger.Debug("🎵   Response channel: type=%s, content_len=%d", channel.Type, len(channel.Content))
+		case channel.IsToolCall():
+			toolCallChannels = append(toolCallChannels, channel)
+			logger.Debug("🎵   Tool call channel: type=%s, content_len=%d", channel.Type, len(channel.Content))
+		default:
+			// Handle unknown channels as regular text content
+			if channel.Content != "" {
+				regularContent = append(regularContent, types.Content{
+					Type: "text",
+					Text: channel.Content,
+				})
+				logger.Debug("🎵   Regular channel: type=%s, content_len=%d", channel.Type, len(channel.Content))
+			}
+		}
+	}
+	
+	// Build thinking metadata from analysis channels
+	var thinkingContent *string
+	if len(thinkingChannels) > 0 {
+		var thinkingParts []string
+		for _, channel := range thinkingChannels {
+			if channel.Content != "" {
+				thinkingParts = append(thinkingParts, channel.Content)
+			}
+		}
+		if len(thinkingParts) > 0 {
+			combinedThinking := strings.Join(thinkingParts, "\n\n")
+			thinkingContent = &combinedThinking
+			logger.Debug("🎵 Combined thinking content: %d characters", len(combinedThinking))
+		}
+	}
+	
+	// Build main response content from final channels
+	var content []types.Content
+	if len(responseChannels) > 0 {
+		var responseParts []string
+		for _, channel := range responseChannels {
+			if channel.Content != "" {
+				responseParts = append(responseParts, channel.Content)
+			}
+		}
+		if len(responseParts) > 0 {
+			combinedResponse := strings.Join(responseParts, "\n\n")
+			content = append(content, types.Content{
+				Type: "text",
+				Text: combinedResponse,
+			})
+			logger.Debug("🎵 Combined response content: %d characters", len(combinedResponse))
+		}
+	}
+	
+	// Handle tool calls from commentary channels and original OpenAI tool calls
+	toolCallsProcessed := false
+	for _, toolCall := range choice.Message.ToolCalls {
+		// Parse arguments back to map
+		var args map[string]interface{}
+		if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &args); err != nil {
+			logger.Warn("⚠️ Failed to parse tool arguments in Harmony response: %v", err)
+			args = make(map[string]interface{})
+		}
+
+		toolContent := types.Content{
+			Type:  "tool_use",
+			ID:    toolCall.ID,
+			Name:  toolCall.Function.Name,
+			Input: args,
+		}
+		content = append(content, toolContent)
+		toolCallsProcessed = true
+
+		logger.Debug("🎵 Tool call processed: %s(id=%s) with args: %v",
+			toolCall.Function.Name, toolCall.ID, args)
+	}
+	
+	// Add any commentary channel content as additional context if no tool calls found
+	if !toolCallsProcessed && len(toolCallChannels) > 0 {
+		for _, channel := range toolCallChannels {
+			if channel.Content != "" {
+				content = append(content, types.Content{
+					Type: "text",
+					Text: channel.Content,
+				})
+				logger.Debug("🎵 Commentary channel added as text: %d characters", len(channel.Content))
+			}
+		}
+	}
+	
+	// Add any regular content that didn't fit into specific channels
+	content = append(content, regularContent...)
+	
+	// Fallback: if no response channels were found, use original choice content
+	if len(responseChannels) == 0 && choice.Message.Content != "" {
+		content = append(content, types.Content{
+			Type: "text",
+			Text: choice.Message.Content,
+		})
+		logger.Debug("🎵 Fallback: using original choice content (%d characters)", len(choice.Message.Content))
+	}
+	
+	// Determine stop reason
+	stopReason := "end_turn"
+	if choice.FinishReason != nil {
+		switch *choice.FinishReason {
+		case "tool_calls":
+			stopReason = "tool_use"
+		case "stop":
+			stopReason = "end_turn"
+		case "length":
+			stopReason = "max_tokens"
+		}
+	}
+	
+	// Create Anthropic response with thinking metadata
+	anthropicResp := &types.AnthropicResponse{
+		ID:           resp.ID,
+		Type:         "message",
+		Role:         "assistant",
+		Model:        model,
+		Content:      content,
+		StopReason:   stopReason,
+		StopSequence: nil,
+		Usage: types.Usage{
+			InputTokens:  resp.Usage.PromptTokens,
+			OutputTokens: resp.Usage.CompletionTokens,
+		},
+		// Thinking metadata fields from Issue #3
+		ThinkingContent: thinkingContent,
+		HarmonyChannels: channels, // Store original channels for debugging
+	}
+	
+	// Log transformation summary
+	hasThinking := anthropicResp.HasThinking()
+	logger.Debug("🎵 Harmony response built: %d content items, thinking=%v, stop_reason=%s",
+		len(content), hasThinking, stopReason)
+	
+	if hasThinking {
+		logger.Debug("🎵 Thinking metadata: %d characters", len(anthropicResp.GetThinkingText()))
+	}
+	
+	return anthropicResp, nil
 }
 
 // buildStandardResponse handles non-Harmony content using existing transformation logic
