@@ -632,7 +632,10 @@ func NewTokenRecognizer() (*TokenRecognizer, error) {
 //		// Handle as regular content
 //	}
 func (tr *TokenRecognizer) HasHarmonyTokens(content string) bool {
-	return tr.startPattern.MatchString(content) || tr.endPattern.MatchString(content)
+	return tr.startPattern.MatchString(content) || 
+		   tr.endPattern.MatchString(content) ||
+		   tr.channelPattern.MatchString(content) || 
+		   tr.messagePattern.MatchString(content)
 }
 
 // ExtractTokens extracts all complete Harmony token sequences from content,
