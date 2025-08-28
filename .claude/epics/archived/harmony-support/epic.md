@@ -2,7 +2,8 @@
 name: harmony-support
 status: completed
 created: 2025-08-27T05:46:56Z
-updated: 2025-08-28T06:07:07Z
+updated: 2025-08-28T11:24:09Z
+completed: 2025-08-28T11:24:09Z
 progress: 100%
 prd: .claude/prds/harmony-support.md
 github: https://github.com/iSevenDays/simple-proxy/issues/1

@@ -35,7 +35,16 @@
       "WebSearch",
       "WebFetch(domain:cookbook.openai.com)",
       "Read(/Users/seven/Documents/projects/epic-harmony-support/**)",
-      "Read(/Users/seven/Documents/projects/epic-harmony-support/**)"
+      "Read(/Users/seven/Documents/projects/epic-harmony-support/**)",
+      "Bash(find:*)",
+      "Read(/Users/seven/Documents/projects/**)",
+      "Bash(gh issue edit:*)",
+      "Bash(for f in .claude/epics/harmony-support/[0-9]*.md)",
+      "Bash(do if [[ ! \"$f\" =~ -analysis ]])",
+      "Bash(done)",
+      "Bash(git worktree:*)",
+      "Bash(go test:*)",
+      "Bash(git add:*)"
     ]
   }
 }
