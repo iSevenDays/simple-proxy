@@ -645,6 +645,7 @@ func TransformOpenAIToAnthropic(ctx context.Context, resp *types.OpenAIResponse,
 
 	// Convert content
 	var content []types.Content
+	var harmonyChannels []parser.Channel
 
 	// Add text content if present
 	if choice.Message.Content != "" {
@@ -698,16 +699,23 @@ func TransformOpenAIToAnthropic(ctx context.Context, resp *types.OpenAIResponse,
 					loggerInstance.Debug("⚠️ No response content found, using original content")
 				}
 
+				// Add thinking content first (if present) for Claude Code UI compatibility
+				if harmonyMsg.ThinkingText != "" {
+					content = append(content, types.Content{
+						Type: "thinking",
+						Text: harmonyMsg.ThinkingText,
+					})
+					loggerInstance.Debug("💭 Added thinking content block: %d characters", len(harmonyMsg.ThinkingText))
+				}
+
+				// Add main response content
 				content = append(content, types.Content{
 					Type: "text",
 					Text: responseText,
 				})
-
-				// TODO: Store thinking content for Claude Code UI
-				// This would be added to anthropicResp.ThinkingContent later
-				if harmonyMsg.ThinkingText != "" {
-					loggerInstance.Debug("💭 Extracted thinking content: %d characters", len(harmonyMsg.ThinkingText))
-				}
+				
+				// Store harmony channels for debugging
+				harmonyChannels = harmonyMsg.Channels
 
 			} else {
 				loggerInstance.Debug("🔍 Harmony tokens found but no channels extracted - treating as non-Harmony")
@@ -765,13 +773,14 @@ func TransformOpenAIToAnthropic(ctx context.Context, resp *types.OpenAIResponse,
 
 	// Create Anthropic response
 	anthropicResp := &types.AnthropicResponse{
-		ID:           resp.ID,
-		Type:         "message",
-		Role:         "assistant",
-		Model:        model,
-		Content:      content,
-		StopReason:   stopReason,
-		StopSequence: nil,
+		ID:             resp.ID,
+		Type:           "message",
+		Role:           "assistant",
+		Model:          model,
+		Content:        content,
+		StopReason:     stopReason,
+		StopSequence:   nil,
+		HarmonyChannels: harmonyChannels,
 		Usage: types.Usage{
 			InputTokens:  resp.Usage.PromptTokens,
 			OutputTokens: resp.Usage.CompletionTokens,

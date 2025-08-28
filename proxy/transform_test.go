@@ -118,13 +118,21 @@ func TestTransformOpenAIToAnthropic_HarmonyProcessing(t *testing.T) {
 				t.Fatal("TransformOpenAIToAnthropic() returned no content")
 			}
 
-			// Check text content
-			if result.Content[0].Type != "text" {
-				t.Errorf("Expected content type 'text', got %s", result.Content[0].Type)
+			// Find the text content block (may not be first due to thinking content)
+			var textBlock *types.Content
+			for i := range result.Content {
+				if result.Content[i].Type == "text" {
+					textBlock = &result.Content[i]
+					break
+				}
+			}
+			
+			if textBlock == nil {
+				t.Fatal("No text content block found in response")
 			}
 
-			if result.Content[0].Text != tt.expectedText {
-				t.Errorf("Expected text %q, got %q", tt.expectedText, result.Content[0].Text)
+			if textBlock.Text != tt.expectedText {
+				t.Errorf("Expected text %q, got %q", tt.expectedText, textBlock.Text)
 			}
 
 			// Additional checks for basic response structure
@@ -183,5 +191,73 @@ func TestTransformOpenAIToAnthropic_HarmonyDisabled(t *testing.T) {
 	// Check that the content is unchanged (not processed as Harmony)
 	if result.Content[0].Text != harmonyContent {
 		t.Errorf("Expected unchanged content when Harmony disabled, got processed content")
+	}
+}
+
+// TestTransformOpenAIToAnthropic_HarmonyThinkingContent tests that thinking content
+// is properly extracted and assigned to the ThinkingContent field for Claude Code UI
+func TestTransformOpenAIToAnthropic_HarmonyThinkingContent(t *testing.T) {
+	// Setup test configuration with Harmony parsing ENABLED
+	cfg := &config.Config{
+		HarmonyParsingEnabled: true,
+	}
+
+	// Test case with both thinking content (analysis channel) and response content (final channel)
+	// Following official OpenAI Harmony format: https://openai.com/open-models/harmony/
+	harmonyContent := `<|start|>assistant<|channel|>analysis<|message|>User asks a question. I need to think about this carefully. This is chain-of-thought reasoning that should be extracted as thinking content for Claude Code UI.<|end|><|start|>assistant<|channel|>final<|message|>This is the final response that should be displayed to the user.<|end|>`
+
+	openAIResp := &types.OpenAIResponse{
+		ID: "test-thinking-content",
+		Choices: []types.OpenAIChoice{
+			{
+				Message: types.OpenAIMessage{
+					Content: harmonyContent,
+				},
+				FinishReason: func() *string { s := "stop"; return &s }(),
+			},
+		},
+		Usage: types.OpenAIUsage{
+			PromptTokens:     10,
+			CompletionTokens: 20,
+		},
+	}
+
+	// Create context
+	ctx := context.Background()
+
+	// Transform response
+	result, err := TransformOpenAIToAnthropic(ctx, openAIResp, "test-model", cfg)
+
+	// Check for errors
+	if err != nil {
+		t.Fatalf("TransformOpenAIToAnthropic() returned error: %v", err)
+	}
+
+	// Check that main response content is extracted from final channel (second content block)
+	expectedResponse := "This is the final response that should be displayed to the user."
+
+
+	// Check that thinking content is added as first content block with type "thinking"
+	expectedThinking := "User asks a question. I need to think about this carefully. This is chain-of-thought reasoning that should be extracted as thinking content for Claude Code UI."
+	if len(result.Content) < 2 {
+		t.Fatalf("Expected at least 2 content blocks (thinking + response), got %d", len(result.Content))
+	}
+	
+	// First content block should be thinking
+	thinkingBlock := result.Content[0]
+	if thinkingBlock.Type != "thinking" {
+		t.Errorf("Expected first content block type to be 'thinking', got: %q", thinkingBlock.Type)
+	}
+	if thinkingBlock.Text != expectedThinking {
+		t.Errorf("Expected thinking content: %q, got: %q", expectedThinking, thinkingBlock.Text)
+	}
+	
+	// Second content block should be main response
+	responseBlock := result.Content[1]
+	if responseBlock.Type != "text" {
+		t.Errorf("Expected second content block type to be 'text', got: %q", responseBlock.Type)
+	}
+	if responseBlock.Text != expectedResponse {
+		t.Errorf("Expected main response: %q, got: %q", expectedResponse, responseBlock.Text)
 	}
 }
