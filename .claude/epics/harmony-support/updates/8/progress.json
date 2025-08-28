@@ -1,0 +1,74 @@
+{
+  "issue": 8,
+  "title": "Fix harmony parsing",
+  "status": "in-progress",
+  "started": "2025-08-28T06:45:00Z",
+  "epic": "harmony-support",
+  "parallel": false,
+  "priority": "high",
+  "streams": {
+    "stream_a": {
+      "title": "Parser Investigation and Debugging",
+      "description": "Deep dive into parsing logic and regex patterns",
+      "status": "ready",
+      "files": ["parser/harmony.go", "test files"],
+      "tasks": [
+        "Analyze current regex patterns for token and channel detection",
+        "Add extensive debug logging to track pattern matching", 
+        "Create failing test case with exact content from logs",
+        "Identify specific regex pattern failures"
+      ]
+    },
+    "stream_b": {
+      "title": "Transform Integration Analysis", 
+      "description": "Integration point analysis and fallback logic",
+      "status": "ready",
+      "files": ["proxy/transform.go"],
+      "tasks": [
+        "Review how parser.IsHarmonyFormat() and parser.ExtractChannels() are called",
+        "Analyze the fallback logic when channels are empty",
+        "Check data transformation issues between detection and extraction",
+        "Verify harmony detection chain-of-responsibility pattern"
+      ]
+    },
+    "stream_c": {
+      "title": "Test Coverage and Validation",
+      "description": "Comprehensive testing of the failing scenario", 
+      "status": "ready",
+      "files": ["test files", "test data"],
+      "tasks": [
+        "Create test cases with exact failing content format",
+        "Test edge cases: quotes, newlines, special characters",
+        "Validate existing Harmony test coverage",
+        "Add performance tests for regex matching"
+      ]
+    },
+    "stream_d": {
+      "title": "Fix Implementation and Validation",
+      "description": "Implement the fix and validate across system",
+      "status": "ready", 
+      "files": ["parser/harmony.go", "proxy/transform.go"],
+      "tasks": [
+        "Fix identified regex patterns or parsing logic",
+        "Ensure all channel types (analysis, final, commentary) work",
+        "Add improved error handling and logging",
+        "Validate fix doesn't break existing functionality"
+      ]
+    }
+  },
+  "coordination": {
+    "parallel_streams": ["stream_a", "stream_b"],
+    "dependent_streams": {
+      "stream_c": ["stream_a"],
+      "stream_d": ["stream_a", "stream_b", "stream_c"]
+    }
+  },
+  "debug_context": {
+    "failing_logs": [
+      "[08:28:22.981] [DEBUG] [req:req_2000] 🔍 Harmony tokens detected, performing full extraction",
+      "[08:28:22.981] [DEBUG] [req:req_2000] 🔍 Harmony tokens found but no channels extracted - treating as non-Harmony"
+    ],
+    "failing_content": "<|channel|>analysis<|message|>The conversation: user asks \"interesting!\" (possibly a comment). We need to respond concisely, following guidelines: less than 4 lines, minimal. Likely respond with a short statement. Might ask if they have any specific request? The instruction says to be concise, no preamble. Possibly respond \"What would you like to work on?\" Keep under 4 lines. Use minimal text.\\n\\n<|end|>What would you like to work on today?",
+    "issue_type": "Channel extraction failure despite successful token detection"
+  }
+}

@@ -125,15 +125,15 @@ func (h *Handler) ReconstructResponseFromChunks(ctx context.Context, chunks []ty
 		// Accumulate tool calls by index (streaming chunks can have partial data)
 		for _, toolCall := range delta.ToolCalls {
 			index := toolCall.Index
-			
+
 			// Ensure we have enough tool calls for this index
 			for len(toolCalls) <= index {
 				toolCalls = append(toolCalls, types.OpenAIToolCall{
-					Type: "function",
+					Type:     "function",
 					Function: types.OpenAIToolCallFunction{},
 				})
 			}
-			
+
 			// Accumulate fields for this tool call index
 			if toolCall.ID != "" {
 				toolCalls[index].ID = toolCall.ID
@@ -186,8 +186,8 @@ func (h *Handler) ReconstructResponseFromChunks(ctx context.Context, chunks []ty
 	if h.obsLogger != nil {
 		h.obsLogger.Info("proxy_core", "success", requestID, "Reconstructed complete response", map[string]interface{}{
 			"content_length": len(message.Content),
-			"tool_calls": len(toolCalls),
-			"finish_reason": finishReasonStr,
+			"tool_calls":     len(toolCalls),
+			"finish_reason":  finishReasonStr,
 		})
 	}
 

@@ -16,7 +16,27 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Config represents the proxy configuration - all settings from .env
+// Config represents the complete proxy configuration, containing all settings
+// loaded from environment variables, YAML override files, and default values.
+//
+// This struct serves as the central configuration hub for the proxy service,
+// providing access to all operational parameters including model endpoints,
+// API keys, feature flags, and behavioral settings.
+//
+// Configuration sources (in order of precedence):
+//   1. Environment variables from .env file (required)
+//   2. YAML override files (optional): tools_override.yaml, system_overrides.yaml
+//   3. Default values (fallback)
+//
+// Key configuration areas:
+//   - Model routing: BigModel, SmallModel, CorrectionModel with endpoints
+//   - Tool management: SkipTools, ToolDescriptions, correction settings
+//   - Logging: Conversation logging, debug flags, sensitive data masking
+//   - Performance: Connection timeouts, circuit breaker integration
+//   - Features: Harmony parsing, system message overrides
+//
+// The Config struct is thread-safe for read operations and includes mutex
+// protection for endpoint rotation and health management operations.
 type Config struct {
 	Port string `json:"port"`
 
@@ -55,25 +75,10 @@ type Config struct {
 	// System message overrides (loaded from system_overrides.yaml)
 	SystemMessageOverrides SystemMessageOverrides `json:"system_message_overrides"`
 
-	// Harmony parsing configuration (.env configurable)
-	// 
-	// Harmony format is OpenAI's structured response format that allows models
-	// to separate thinking/reasoning content from final user-facing responses.
-	// These settings control how the proxy handles Harmony-formatted content
-	// during request/response transformation.
-	//
-	// Environment variables:
-	//   HARMONY_PARSING_ENABLED - Enable/disable Harmony format parsing (default: true)
-	//   HARMONY_DEBUG          - Enable debug logging for parsing operations (default: false)
-	//   HARMONY_STRICT_MODE    - Strict error handling for malformed content (default: false)
-	//
-	// Integration points:
-	//   - Stream B (Detection): Uses HarmonyParsingEnabled to decide whether to detect Harmony tokens
-	//   - Stream C (Response Building): Uses HarmonyDebug and HarmonyStrictMode for error handling
-	//   - Transformation pipeline: Uses these settings to control parsing behavior
-	HarmonyParsingEnabled bool `json:"harmony_parsing_enabled"` // Enable/disable Harmony format parsing
-	HarmonyDebug          bool `json:"harmony_debug"`           // Enable debug logging for Harmony parsing
-	HarmonyStrictMode     bool `json:"harmony_strict_mode"`     // Enable strict error handling for malformed Harmony content
+	// Harmony parsing settings
+	HarmonyParsingEnabled bool `json:"harmony_parsing_enabled"` // Enable Harmony format parsing
+	HarmonyDebug          bool `json:"harmony_debug"`           // Enable detailed Harmony debug logging
+	HarmonyStrictMode     bool `json:"harmony_strict_mode"`     // Strict error handling for malformed Harmony content
 
 	// Model configuration (.env configurable)
 	BigModel        string `json:"big_model"`        // For Claude Sonnet requests
@@ -107,7 +112,25 @@ type Config struct {
 	} `json:"-"`
 }
 
-// SetObservabilityLogger sets the observability logger for structured logging
+// SetObservabilityLogger configures structured logging for the configuration
+// system, enabling detailed tracking of configuration operations and health management.
+//
+// This method establishes the logging infrastructure used throughout the
+// configuration system for monitoring endpoint health, rotation decisions,
+// and configuration changes. The logger interface provides structured
+// logging with component, category, and field-based organization.
+//
+// The observability logger enables:
+//   - Configuration change tracking
+//   - Endpoint health monitoring
+//   - Circuit breaker state logging
+//   - Performance metrics collection
+//   - Error and warning reporting
+//
+// Parameters:
+//   - obsLogger: Structured logger implementing Info, Warn, and Error methods
+//
+// Thread Safety: This method is safe to call concurrently.
 func (c *Config) SetObservabilityLogger(obsLogger interface {
 	Info(component, category, requestID, message string, fields map[string]interface{})
 	Warn(component, category, requestID, message string, fields map[string]interface{})
@@ -141,7 +164,33 @@ func (c *Config) logError(component, category, requestID, message string, fields
 	}
 }
 
-// GetDefaultConfig returns a default configuration for testing
+// GetDefaultConfig returns a Config instance populated with sensible default
+// values for testing and development environments.
+//
+// This function provides a baseline configuration that can be used for:
+//   - Unit testing without external dependencies
+//   - Development environment bootstrapping
+//   - Configuration validation and comparison
+//   - Fallback when environment configuration fails
+//
+// Default configuration includes:
+//   - Standard port (3456) for proxy service
+//   - All optional features disabled for predictable behavior
+//   - Conservative logging and performance settings
+//   - Empty collections for tools and overrides
+//   - Circuit breaker with default configuration
+//
+// Note: This configuration requires .env file completion for production use,
+// as model endpoints and API keys are not provided in defaults.
+//
+// Returns:
+//   - A fully initialized Config struct with default values
+//
+// Example:
+//
+//	config := GetDefaultConfig()
+//	// Customize for testing
+//	config.BigModel = "test-model"
 func GetDefaultConfig() *Config {
 	return &Config{
 		Port:                         "3456",
@@ -157,9 +206,9 @@ func GetDefaultConfig() *Config {
 		ConversationMaskSensitive:    true,                     // Enable sensitive data masking by default
 		EnableToolChoiceCorrection:   false,                    // Disable tool choice correction by default
 		SystemMessageOverrides:       SystemMessageOverrides{}, // Empty by default
-		HarmonyParsingEnabled:        true,                     // Enable Harmony parsing by default
-		HarmonyDebug:                 false,                    // Disable debug logging by default
-		HarmonyStrictMode:            false,                    // Disable strict mode by default
+		HarmonyParsingEnabled:        true,                      // Enable by default
+		HarmonyDebug:                 false,                     // Disabled by default
+		HarmonyStrictMode:            false,                     // Lenient by default
 		BigModel:                     "",                       // Will be set from .env
 		SmallModel:                   "",                       // Will be set from .env
 		CorrectionModel:              "",                       // Will be set from .env
@@ -173,7 +222,45 @@ func GetDefaultConfig() *Config {
 	}
 }
 
-// LoadConfigWithEnv loads configuration from .env file only - no CCR dependency
+// LoadConfigWithEnv loads complete proxy configuration from environment variables
+// and optional YAML override files, providing production-ready configuration.
+//
+// This function performs comprehensive configuration loading:
+//   1. Environment variable validation from .env file (required)
+//   2. Model endpoint parsing with multi-endpoint support
+//   3. API key validation and secure masking
+//   4. Optional YAML file loading with graceful degradation
+//   5. Circuit breaker initialization for health management
+//   6. Configuration validation and error reporting
+//
+// Required .env variables:
+//   - BIG_MODEL, SMALL_MODEL, CORRECTION_MODEL: Model identifiers
+//   - BIG_MODEL_ENDPOINT, SMALL_MODEL_ENDPOINT, TOOL_CORRECTION_ENDPOINT: Provider URLs
+//   - BIG_MODEL_API_KEY, SMALL_MODEL_API_KEY, TOOL_CORRECTION_API_KEY: Authentication
+//   - LOG_FULL_TOOLS, CONVERSATION_TRUNCATION: Logging configuration
+//
+// Optional configurations:
+//   - Feature flags: HARMONY_PARSING_ENABLED, PRINT_SYSTEM_MESSAGE
+//   - Performance: DEFAULT_CONNECTION_TIMEOUT, SKIP_TOOLS
+//   - Logging: CONVERSATION_LOGGING_ENABLED, various debug flags
+//
+// The function provides detailed error messages for missing or invalid
+// configuration values, enabling rapid deployment troubleshooting.
+//
+// Returns:
+//   - A fully configured Config instance ready for production use
+//   - An error if any required configuration is missing or invalid
+//
+// Performance: Configuration loading is optimized for startup time with
+// one-time regex compilation and efficient parsing.
+//
+// Example:
+//
+//	config, err := LoadConfigWithEnv()
+//	if err != nil {
+//		log.Fatal("Configuration error:", err)
+//	}
+//	// Use config for proxy initialization
 func LoadConfigWithEnv() (*Config, error) {
 	// Load .env file for complete configuration - REQUIRED
 	envVars, err := loadEnvFile()
@@ -198,9 +285,9 @@ func LoadConfigWithEnv() (*Config, error) {
 		DefaultConnectionTimeout:     30,                       // 30 seconds default connection timeout
 		EnableToolChoiceCorrection:   false,                    // Disable tool choice correction by default
 		SystemMessageOverrides:       SystemMessageOverrides{}, // Empty by default
-		HarmonyParsingEnabled:        true,                     // Enable Harmony parsing by default
-		HarmonyDebug:                 false,                    // Disable debug logging by default
-		HarmonyStrictMode:            false,                    // Disable strict mode by default
+		HarmonyParsingEnabled:        true,                      // Enable by default
+		HarmonyDebug:                 false,                     // Disabled by default
+		HarmonyStrictMode:            false,                     // Lenient by default
 		HealthManager:              circuitbreaker.NewHealthManager(circuitbreaker.DefaultConfig()),
 	}
 
@@ -610,13 +697,13 @@ func LoadConfigWithEnv() (*Config, error) {
 			cfg.HarmonyStrictMode = true
 			cfg.logInfo("configuration", "request", "", "Configured HARMONY_STRICT_MODE", map[string]interface{}{
 				"enabled": true,
-				"description": "strict error handling for malformed Harmony content",
+				"description": "Harmony strict error handling enabled",
 			})
 		} else {
 			cfg.HarmonyStrictMode = false
 			cfg.logInfo("configuration", "request", "", "Configured HARMONY_STRICT_MODE", map[string]interface{}{
 				"enabled": false,
-				"description": "lenient error handling for malformed Harmony content",
+				"description": "Harmony lenient error handling (default)",
 			})
 		}
 	}
@@ -699,7 +786,38 @@ func loadEnvFile() (map[string]string, error) {
 	return envVars, scanner.Err()
 }
 
-// MapModelName translates Claude Code model names to configured provider-specific names
+// MapModelName translates Claude Code model identifiers to configured provider-specific
+// model names, enabling flexible model routing without hardcoded dependencies.
+//
+// This method provides the critical translation layer between Claude Code's
+// standardized model names and the actual model identifiers used by configured
+// providers. The mapping enables provider flexibility while maintaining
+// consistent model selection logic.
+//
+// Current model mappings:
+//   - claude-3-5-haiku-20241022 → SMALL_MODEL (configured via .env)
+//   - claude-sonnet-4-20250514 → BIG_MODEL (configured via .env)
+//
+// The mapping system enables:
+//   - Provider-agnostic model selection
+//   - Easy provider switching through configuration
+//   - Model name abstraction for Claude Code
+//   - Centralized model routing logic
+//
+// Parameters:
+//   - ctx: Request context for logging correlation
+//   - claudeModel: Claude Code model identifier
+//
+// Returns:
+//   - The corresponding provider-specific model name
+//   - Original model name if no mapping exists (graceful fallback)
+//
+// Performance: O(1) constant time lookup with map access.
+//
+// Example:
+//
+//	mappedModel := config.MapModelName(ctx, "claude-sonnet-4-20250514")
+//	// mappedModel contains the BIG_MODEL value from .env
 func (c *Config) MapModelName(ctx context.Context, claudeModel string) string {
 	// Extract request ID from context for logging (if available)
 	requestID := internal.GetRequestID(ctx)
@@ -725,7 +843,33 @@ func (c *Config) MapModelName(ctx context.Context, claudeModel string) string {
 	return claudeModel
 }
 
-// GetToolDescription returns the override description if available, otherwise returns original
+// GetToolDescription returns the appropriate tool description, using override
+// descriptions when available or falling back to the original description.
+//
+// This method enables tool description customization through the tools_override.yaml
+// configuration file, allowing administrators to:
+//   - Customize tool descriptions for specific environments
+//   - Add organization-specific tool usage guidance
+//   - Override tool descriptions without code changes
+//   - Maintain tool functionality while adapting documentation
+//
+// The method provides a clean abstraction over the tool description resolution
+// logic, ensuring consistent behavior across the proxy system.
+//
+// Parameters:
+//   - toolName: The name of the tool to look up
+//   - originalDescription: The default tool description
+//
+// Returns:
+//   - Override description if configured in tools_override.yaml
+//   - Original description if no override is configured
+//
+// Performance: O(1) constant time map lookup.
+//
+// Example:
+//
+//	description := config.GetToolDescription("WebSearch", defaultDescription)
+//	// Returns customized description if configured, original otherwise
 func (c *Config) GetToolDescription(toolName, originalDescription string) string {
 	return GetToolDescription(c.ToolDescriptions, toolName, originalDescription)
 }
@@ -735,8 +879,42 @@ type ToolDescriptionsYAML struct {
 	ToolDescriptions map[string]string `yaml:"toolDescriptions"`
 }
 
-// LoadToolDescriptions loads tool description overrides from tools_override.yaml
-// Returns empty map if file doesn't exist (no error)
+// LoadToolDescriptions loads tool description overrides from tools_override.yaml,
+// providing customizable tool documentation without requiring code changes.
+//
+// This function enables runtime customization of tool descriptions through
+// YAML configuration, supporting environment-specific tool documentation
+// and organizational customization requirements.
+//
+// The function provides graceful handling of missing configuration:
+//   - Returns empty map (no error) if tools_override.yaml doesn't exist
+//   - Enables optional tool customization without breaking basic functionality
+//   - Supports incremental tool override adoption
+//
+// YAML file structure:
+//   toolDescriptions:
+//     WebSearch: "Custom search tool description"
+//     Read: "Custom file reading tool description"
+//
+// Error handling:
+//   - Missing file: Returns empty map, no error (graceful degradation)
+//   - Invalid YAML: Returns error with parsing details
+//   - File access issues: Returns error with file operation details
+//
+// Returns:
+//   - Map of tool names to override descriptions
+//   - Empty map if file doesn't exist (successful case)
+//   - Error only for file access or parsing issues
+//
+// Performance: File I/O with YAML parsing, cached after initial load.
+//
+// Example:
+//
+//	overrides, err := LoadToolDescriptions()
+//	if err != nil {
+//		log.Printf("Tool override loading failed: %v", err)
+//		// Continue with empty overrides
+//	}
 func LoadToolDescriptions() (map[string]string, error) {
 	file, err := os.Open("tools_override.yaml")
 	if err != nil {
@@ -768,7 +946,34 @@ func LoadToolDescriptions() (map[string]string, error) {
 	return yamlData.ToolDescriptions, nil
 }
 
-// GetToolDescription returns the override description if available, otherwise returns original
+// GetToolDescription provides package-level tool description resolution with
+// explicit override map parameter for flexible usage patterns.
+//
+// This function offers a pure, stateless approach to tool description resolution,
+// enabling custom override map usage without requiring Config instance access.
+// Useful for testing, custom override sources, and modular tool processing.
+//
+// The function implements the core tool description resolution logic:
+//   - Check override map for custom description
+//   - Return custom description if found
+//   - Return original description if no override exists
+//
+// Parameters:
+//   - overrides: Map of tool names to override descriptions
+//   - toolName: The tool name to resolve
+//   - originalDescription: Fallback description if no override exists
+//
+// Returns:
+//   - Override description if present in the map
+//   - Original description if no override is configured
+//
+// Performance: O(1) constant time map lookup.
+//
+// Example:
+//
+//	overrides := map[string]string{"WebSearch": "Custom search"}
+//	description := GetToolDescription(overrides, "WebSearch", "Default search")
+//	// Returns "Custom search"
 func GetToolDescription(overrides map[string]string, toolName, originalDescription string) string {
 	if override, exists := overrides[toolName]; exists {
 		return override
@@ -776,13 +981,40 @@ func GetToolDescription(overrides map[string]string, toolName, originalDescripti
 	return originalDescription
 }
 
-// SystemMessageReplacement represents a find/replace operation for system messages
+// SystemMessageReplacement represents a single find-and-replace operation
+// for system message content modification, enabling precise text transformations.
+//
+// This struct defines atomic text replacement operations that can be applied
+// to system messages, supporting content customization, branding updates,
+// and environment-specific message modifications.
+//
+// The replacement operation:
+//   - Find: Exact text string to locate and replace
+//   - Replace: Replacement text to substitute
+//
+// Multiple replacements can be chained together for complex transformations,
+// with each operation applied sequentially to the system message content.
 type SystemMessageReplacement struct {
 	Find    string `yaml:"find"`
 	Replace string `yaml:"replace"`
 }
 
-// SystemMessageOverrides represents system message modification configuration
+// SystemMessageOverrides represents comprehensive system message modification
+// configuration, enabling content customization through multiple transformation types.
+//
+// This struct provides complete control over system message content through:
+//   - Pattern-based removal using regular expressions
+//   - Find-and-replace text transformations
+//   - Content prepending and appending operations
+//
+// Transformation order (applied sequentially):
+//   1. RemovePatterns: Regex-based content removal
+//   2. Replacements: Find-and-replace text substitutions
+//   3. Prepend: Content added to message beginning
+//   4. Append: Content added to message end
+//
+// This configuration enables comprehensive system message customization
+// for branding, environment-specific instructions, and content filtering.
 type SystemMessageOverrides struct {
 	RemovePatterns []string                   `yaml:"removePatterns"`
 	Replacements   []SystemMessageReplacement `yaml:"replacements"`
@@ -795,8 +1027,40 @@ type SystemMessageOverridesYAML struct {
 	SystemMessageOverrides SystemMessageOverrides `yaml:"systemMessageOverrides"`
 }
 
-// LoadSystemMessageOverrides loads system message overrides from system_overrides.yaml
-// Returns empty struct if file doesn't exist (no error)
+// LoadSystemMessageOverrides loads system message modification configuration
+// from system_overrides.yaml, enabling runtime system message customization.
+//
+// This function provides flexible system message customization through YAML
+// configuration, supporting environment-specific message modifications,
+// branding updates, and content filtering without code changes.
+//
+// The function handles missing configuration gracefully:
+//   - Returns empty struct (no error) if system_overrides.yaml doesn't exist
+//   - Enables optional system message customization
+//   - Supports incremental override adoption
+//
+// YAML file structure:
+//   systemMessageOverrides:
+//     removePatterns:
+//       - "pattern1"
+//       - "pattern2"
+//     replacements:
+//       - find: "old text"
+//         replace: "new text"
+//     prepend: "Additional instructions\n"
+//     append: "\nFooter content"
+//
+// Error handling:
+//   - Missing file: Returns empty struct, no error (graceful)
+//   - Invalid YAML: Returns error with parsing details
+//   - File access issues: Returns error with operation details
+//
+// Returns:
+//   - SystemMessageOverrides struct with loaded configuration
+//   - Empty struct if file doesn't exist (successful case)
+//   - Error only for file access or parsing issues
+//
+// Performance: File I/O with YAML parsing, cached after initial load.
 func LoadSystemMessageOverrides() (SystemMessageOverrides, error) {
 	file, err := os.Open("system_overrides.yaml")
 	if err != nil {
@@ -822,8 +1086,40 @@ func LoadSystemMessageOverrides() (SystemMessageOverrides, error) {
 	return overrides, nil
 }
 
-// ApplySystemMessageOverrides applies system message modifications
-// Operations are applied in order: removePatterns -> replacements -> prepend/append
+// ApplySystemMessageOverrides applies comprehensive system message modifications
+// using the provided override configuration, transforming content through multiple stages.
+//
+// This function implements the complete system message transformation pipeline:
+//   1. Pattern removal: Regex-based content filtering
+//   2. Text replacement: Find-and-replace substitutions
+//   3. Content addition: Prepend and append operations
+//
+// Transformation sequence (order is significant):
+//   - removePatterns: Applied first using compiled regex patterns
+//   - replacements: Applied to pattern-filtered content
+//   - prepend/append: Applied last to finalize content
+//
+// The function provides detailed logging of all transformations for debugging
+// and monitoring purposes, enabling administrators to verify modification behavior.
+//
+// Error handling:
+//   - Invalid regex patterns: Logged as warnings, pattern skipped
+//   - Processing continues with remaining valid patterns
+//   - Graceful degradation ensures message processing completion
+//
+// Parameters:
+//   - originalMessage: Source system message content
+//   - overrides: Configuration specifying all modifications to apply
+//
+// Returns:
+//   - Transformed message with all applicable modifications applied
+//
+// Performance: O(n*m) where n is message length and m is number of patterns/replacements.
+//
+// Example:
+//
+//	modified := ApplySystemMessageOverrides(original, overrides)
+//	// Returns message with all configured transformations applied
 func ApplySystemMessageOverrides(originalMessage string, overrides SystemMessageOverrides) string {
 	message := originalMessage
 
@@ -878,8 +1174,37 @@ func ApplySystemMessageOverrides(originalMessage string, overrides SystemMessage
 	return message
 }
 
-// GetBigModelEndpoint returns the next BIG_MODEL endpoint with simple round-robin
-// Note: Big model endpoints bypass circuit breaker since 30min+ processing time is normal
+// GetBigModelEndpoint returns the next BIG_MODEL endpoint using simple round-robin
+// rotation, optimized for long-running requests with extended processing times.
+//
+// This method provides endpoint selection for BIG_MODEL requests, which typically
+// involve complex reasoning tasks that may require 30+ minutes of processing time.
+// Due to these extended processing requirements, big model endpoints bypass
+// circuit breaker logic to avoid false failure detection.
+//
+// Endpoint selection characteristics:
+//   - Simple round-robin rotation without health checking
+//   - No circuit breaker integration (extended processing time tolerance)
+//   - Thread-safe endpoint index management
+//   - Automatic wraparound for continuous rotation
+//
+// The method is optimized for scenarios where extended processing time is
+// expected and normal, avoiding premature request termination due to timeouts.
+//
+// Returns:
+//   - Next endpoint in the BIG_MODEL rotation sequence
+//   - Empty string if no endpoints are configured
+//
+// Thread Safety: This method uses mutex protection for safe concurrent access.
+//
+// Performance: O(1) constant time with mutex synchronization.
+//
+// Example:
+//
+//	endpoint := config.GetBigModelEndpoint()
+//	if endpoint != "" {
+//		// Use endpoint for big model request
+//	}
 func (c *Config) GetBigModelEndpoint() string {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
@@ -896,7 +1221,37 @@ func (c *Config) GetBigModelEndpoint() string {
 	return endpoint
 }
 
-// GetSmallModelEndpoint returns the next SMALL_MODEL endpoint with round-robin failover
+// GetSmallModelEndpoint returns the next SMALL_MODEL endpoint using intelligent
+// round-robin rotation with health-based failover and success rate optimization.
+//
+// This method provides sophisticated endpoint selection for SMALL_MODEL requests,
+// incorporating circuit breaker health management and performance-based routing
+// to maximize request success rates and minimize latency.
+//
+// Endpoint selection features:
+//   - Health-aware round-robin with circuit breaker integration
+//   - Success rate-based endpoint reordering for optimization
+//   - Automatic failover to healthy endpoints
+//   - Performance monitoring and adjustment
+//
+// The method prioritizes endpoints with better success rates while maintaining
+// load distribution across healthy endpoints, ensuring optimal performance
+// for high-frequency small model requests.
+//
+// Returns:
+//   - Next healthy endpoint in the optimized rotation sequence
+//   - Empty string if no endpoints are configured
+//
+// Thread Safety: This method uses mutex protection for safe concurrent access.
+//
+// Performance: O(n) where n is the number of endpoints, with health evaluation.
+//
+// Example:
+//
+//	endpoint := config.GetSmallModelEndpoint()
+//	if endpoint != "" {
+//		// Use healthy endpoint for small model request
+//	}
 func (c *Config) GetSmallModelEndpoint() string {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
@@ -911,7 +1266,37 @@ func (c *Config) GetSmallModelEndpoint() string {
 	return c.HealthManager.SelectHealthyEndpoint(c.SmallModelEndpoints, &c.smallModelIndex)
 }
 
-// GetToolCorrectionEndpoint returns the next TOOL_CORRECTION endpoint with round-robin failover
+// GetToolCorrectionEndpoint returns the next TOOL_CORRECTION endpoint using
+// intelligent round-robin rotation with health-based failover for tool validation.
+//
+// This method provides reliable endpoint selection for tool correction operations,
+// ensuring high availability for critical tool call validation and correction
+// processes that maintain system functionality.
+//
+// Endpoint selection features:
+//   - Health-aware round-robin with circuit breaker integration
+//   - Success rate-based endpoint reordering
+//   - Automatic failover to healthy endpoints
+//   - Detailed logging for tool correction endpoint selection
+//
+// Tool correction endpoints are critical for maintaining tool call functionality
+// when tool validation fails, making reliable endpoint selection essential
+// for system stability.
+//
+// Returns:
+//   - Next healthy endpoint in the tool correction rotation sequence
+//   - Empty string if no endpoints are configured
+//
+// Thread Safety: This method uses mutex protection for safe concurrent access.
+//
+// Performance: O(n) where n is the number of endpoints, with health evaluation.
+//
+// Example:
+//
+//	endpoint := config.GetToolCorrectionEndpoint()
+//	if endpoint != "" {
+//		// Use healthy endpoint for tool correction
+//	}
 func (c *Config) GetToolCorrectionEndpoint() string {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
@@ -926,22 +1311,145 @@ func (c *Config) GetToolCorrectionEndpoint() string {
 	return c.HealthManager.SelectHealthyEndpoint(c.ToolCorrectionEndpoints, &c.toolCorrectionIndex)
 }
 
-// IsEndpointHealthy checks if an endpoint is available (circuit closed)
+// IsEndpointHealthy checks whether the specified endpoint is currently healthy
+// and available for request processing based on circuit breaker state.
+//
+// This method provides real-time health status for endpoints, enabling
+// request routing decisions and load balancing based on endpoint availability.
+// The health check considers circuit breaker state, failure counts, and
+// recovery timing.
+//
+// Health determination factors:
+//   - Circuit breaker state (open/closed/half-open)
+//   - Recent failure counts and patterns
+//   - Recovery timeouts and retry windows
+//   - Success rate trends
+//
+// Parameters:
+//   - endpoint: The endpoint URL to check for health status
+//
+// Returns:
+//   - true if the endpoint is healthy and available for requests
+//   - false if the endpoint is unhealthy or circuit breaker is open
+//
+// Thread Safety: This method is safe for concurrent access.
+//
+// Performance: O(1) constant time health state lookup.
+//
+// Example:
+//
+//	if config.IsEndpointHealthy(endpoint) {
+//		// Route request to healthy endpoint
+//	} else {
+//		// Skip unhealthy endpoint
+//	}
 func (c *Config) IsEndpointHealthy(endpoint string) bool {
 	return c.HealthManager.IsHealthy(endpoint)
 }
 
-// GetEndpointHealthDebug returns debug information about an endpoint's health
+// GetEndpointHealthDebug provides comprehensive debugging information about
+// an endpoint's health status, circuit breaker state, and recovery timing.
+//
+// This method enables detailed health monitoring and troubleshooting by
+// exposing internal health management state for administrative and
+// debugging purposes.
+//
+// Debug information includes:
+//   - failureCount: Number of consecutive failures recorded
+//   - circuitOpen: Whether the circuit breaker is currently open
+//   - nextRetryTime: When the endpoint will next be eligible for retry
+//   - exists: Whether the endpoint is known to the health manager
+//
+// The information supports operational monitoring, capacity planning,
+// and troubleshooting of endpoint availability issues.
+//
+// Parameters:
+//   - endpoint: The endpoint URL to retrieve debug information for
+//
+// Returns:
+//   - failureCount: Consecutive failure count for the endpoint
+//   - circuitOpen: Circuit breaker open status
+//   - nextRetryTime: Next retry attempt time
+//   - exists: Whether the endpoint is tracked by health manager
+//
+// Thread Safety: This method is safe for concurrent access.
+//
+// Performance: O(1) constant time state lookup.
+//
+// Example:
+//
+//	failures, open, retry, exists := config.GetEndpointHealthDebug(endpoint)
+//	if exists {
+//		log.Printf("Endpoint %s: %d failures, circuit open: %v, retry: %v",
+//			endpoint, failures, open, retry)
+//	}
 func (c *Config) GetEndpointHealthDebug(endpoint string) (failureCount int, circuitOpen bool, nextRetryTime time.Time, exists bool) {
 	return c.HealthManager.GetHealthDebug(endpoint)
 }
 
-// RecordEndpointFailure marks an endpoint as failed and potentially opens its circuit
+// RecordEndpointFailure registers a failure event for the specified endpoint,
+// updating circuit breaker state and potentially opening the circuit for protection.
+//
+// This method maintains endpoint health tracking by recording failure events
+// and triggering circuit breaker logic when failure thresholds are exceeded.
+// Proper failure recording is essential for maintaining system stability
+// and preventing cascading failures.
+//
+// Failure recording effects:
+//   - Increments consecutive failure count for the endpoint
+//   - Evaluates circuit breaker threshold conditions
+//   - Opens circuit breaker if failure threshold is exceeded
+//   - Updates failure timing for recovery calculations
+//
+// The method should be called immediately after detecting endpoint failures
+// to ensure accurate health tracking and timely circuit breaker activation.
+//
+// Parameters:
+//   - endpoint: The endpoint URL that experienced a failure
+//
+// Thread Safety: This method is safe for concurrent access.
+//
+// Performance: O(1) constant time failure recording with minimal overhead.
+//
+// Example:
+//
+//	if requestFailed {
+//		config.RecordEndpointFailure(endpoint)
+//		// Circuit breaker may now be open for this endpoint
+//	}
 func (c *Config) RecordEndpointFailure(endpoint string) {
 	c.HealthManager.RecordFailure(endpoint)
 }
 
-// RecordEndpointSuccess marks an endpoint as successful and potentially closes its circuit
+// RecordEndpointSuccess registers a success event for the specified endpoint,
+// updating circuit breaker state and potentially closing the circuit for recovery.
+//
+// This method maintains endpoint health tracking by recording successful
+// request completions and triggering circuit breaker recovery logic when
+// success patterns indicate endpoint recovery.
+//
+// Success recording effects:
+//   - Resets consecutive failure count for the endpoint
+//   - Evaluates circuit breaker recovery conditions
+//   - Closes circuit breaker if recovery criteria are met
+//   - Updates success timing for performance tracking
+//
+// The method should be called after successful request completion to ensure
+// accurate health tracking and timely circuit breaker recovery.
+//
+// Parameters:
+//   - endpoint: The endpoint URL that completed successfully
+//
+// Thread Safety: This method is safe for concurrent access.
+//
+// Performance: O(1) constant time success recording with minimal overhead.
+//
+// Example:
+//
+//	if requestSucceeded {
+//		config.RecordEndpointSuccess(endpoint)
+//		// Circuit breaker may now be closed for this endpoint
+//	}
 func (c *Config) RecordEndpointSuccess(endpoint string) {
 	c.HealthManager.RecordSuccess(endpoint)
 }
@@ -1020,33 +1528,156 @@ func (c *Config) MarkEndpointFailed(endpointType string) {
 	}
 }
 
-// ============================================================================
-// HARMONY PARSING CONFIGURATION API
-// ============================================================================
+// Harmony configuration API methods
 
-// IsHarmonyParsingEnabled returns whether Harmony format parsing is enabled
-// This is the primary integration point for other components to check if
-// Harmony parsing should be performed on response content
+// IsHarmonyParsingEnabled returns whether Harmony format parsing is currently
+// enabled in the proxy configuration, controlling response processing behavior.
+//
+// This method provides access to the HARMONY_PARSING_ENABLED configuration
+// setting, which determines whether the proxy should attempt to parse and
+// process OpenAI Harmony format responses for enhanced Claude Code UI support.
+//
+// When Harmony parsing is enabled:
+//   - Response content is analyzed for Harmony format tokens
+//   - Thinking and response content are separated
+//   - Channel metadata is preserved for debugging
+//   - Enhanced UI rendering is supported
+//
+// When disabled, responses are processed as standard text without
+// Harmony-specific formatting or content separation.
+//
+// Returns:
+//   - true if Harmony parsing is enabled
+//   - false if Harmony parsing is disabled
+//
+// Thread Safety: This method is safe for concurrent access (read-only).
+//
+// Example:
+//
+//	if config.IsHarmonyParsingEnabled() {
+//		// Parse response for Harmony content
+//	} else {
+//		// Process as standard response
+//	}
 func (c *Config) IsHarmonyParsingEnabled() bool {
 	return c.HarmonyParsingEnabled
 }
 
-// IsHarmonyDebugEnabled returns whether Harmony debug logging is enabled
-// Components should use this to decide whether to emit detailed debug logs
-// about Harmony parsing operations
+// IsHarmonyDebugEnabled returns whether detailed Harmony debug logging is
+// currently enabled, controlling the verbosity of Harmony parsing operations.
+//
+// This method provides access to the HARMONY_DEBUG configuration setting,
+// which determines whether the proxy should generate detailed logging
+// information during Harmony parsing operations for troubleshooting and monitoring.
+//
+// When Harmony debug logging is enabled:
+//   - Detailed token parsing information is logged
+//   - Channel extraction steps are documented
+//   - Content transformation details are recorded
+//   - Parsing errors and warnings are expanded
+//
+// Debug logging should typically be enabled only in development or
+// troubleshooting scenarios due to increased log volume.
+//
+// Returns:
+//   - true if Harmony debug logging is enabled
+//   - false if Harmony debug logging is disabled
+//
+// Thread Safety: This method is safe for concurrent access (read-only).
+//
+// Example:
+//
+//	if config.IsHarmonyDebugEnabled() {
+//		log.Printf("Harmony parsing details: %+v", parseResult)
+//	}
 func (c *Config) IsHarmonyDebugEnabled() bool {
 	return c.HarmonyDebug
 }
 
-// IsHarmonyStrictModeEnabled returns whether strict error handling is enabled
-// When true, components should treat malformed Harmony content as an error
-// When false, components should gracefully handle malformed content
+// IsHarmonyStrictModeEnabled returns whether Harmony strict error handling mode
+// is currently enabled, controlling parser behavior when encountering malformed content.
+//
+// This method provides access to the HARMONY_STRICT_MODE configuration setting,
+// which determines how the Harmony parser should handle structural errors
+// and malformed token sequences.
+//
+// Strict mode behavior:
+//   - Parsing errors cause request failures
+//   - Malformed tokens result in error responses
+//   - Structural validation is enforced strictly
+//   - Invalid content is rejected rather than ignored
+//
+// Lenient mode behavior (default):
+//   - Parsing errors are logged but processing continues
+//   - Malformed tokens are skipped gracefully
+//   - Partial parsing results are accepted
+//   - Best-effort content extraction is performed
+//
+// Returns:
+//   - true if Harmony strict mode is enabled
+//   - false if lenient mode is enabled (default)
+//
+// Thread Safety: This method is safe for concurrent access (read-only).
+//
+// Example:
+//
+//	if config.IsHarmonyStrictModeEnabled() {
+//		// Fail request on parsing errors
+//	} else {
+//		// Continue with partial results
+//	}
 func (c *Config) IsHarmonyStrictModeEnabled() bool {
 	return c.HarmonyStrictMode
 }
 
-// GetHarmonyConfiguration returns all Harmony-related configuration values
-// Useful for components that need to access multiple Harmony settings
-func (c *Config) GetHarmonyConfiguration() (enabled, debug, strict bool) {
-	return c.HarmonyParsingEnabled, c.HarmonyDebug, c.HarmonyStrictMode
+// HarmonyConfiguration represents a complete snapshot of all Harmony-related
+// configuration settings, providing a unified view of parsing behavior control.
+//
+// This struct aggregates all Harmony configuration settings into a single
+// structure for convenient access, serialization, and configuration management.
+// It enables atomic configuration queries and simplified configuration sharing.
+//
+// Configuration fields:
+//   - ParsingEnabled: Whether Harmony parsing is active
+//   - Debug: Whether detailed debug logging is enabled
+//   - StrictMode: Whether strict error handling is enforced
+//
+// The struct is designed for read-only configuration access and can be
+// safely serialized for monitoring, logging, and configuration validation.
+type HarmonyConfiguration struct {
+	ParsingEnabled bool `json:"parsing_enabled"`
+	Debug          bool `json:"debug"`
+	StrictMode     bool `json:"strict_mode"`
+}
+
+// GetHarmonyConfiguration returns a complete snapshot of all Harmony-related
+// configuration settings as a unified structure for convenient access.
+//
+// This method provides atomic access to all Harmony configuration settings,
+// ensuring consistent configuration state across related operations and
+// enabling simplified configuration management and monitoring.
+//
+// The returned configuration includes:
+//   - Parsing enablement status
+//   - Debug logging configuration
+//   - Error handling mode settings
+//
+// Returns:
+//   - HarmonyConfiguration struct with current settings
+//
+// Thread Safety: This method is safe for concurrent access (read-only).
+//
+// Performance: O(1) constant time configuration access.
+//
+// Example:
+//
+//	harmonyConfig := config.GetHarmonyConfiguration()
+//	log.Printf("Harmony config: parsing=%v, debug=%v, strict=%v",
+//		harmonyConfig.ParsingEnabled, harmonyConfig.Debug, harmonyConfig.StrictMode)
+func (c *Config) GetHarmonyConfiguration() HarmonyConfiguration {
+	return HarmonyConfiguration{
+		ParsingEnabled: c.HarmonyParsingEnabled,
+		Debug:          c.HarmonyDebug,
+		StrictMode:     c.HarmonyStrictMode,
+	}
 }

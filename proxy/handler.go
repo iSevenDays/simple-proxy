@@ -19,12 +19,12 @@ import (
 
 // Handler handles HTTP proxy requests
 type Handler struct {
-	config             *config.Config
-	correctionService  *correction.Service
-	loggerConfig       logger.LoggerConfig
+	config                *config.Config
+	correctionService     *correction.Service
+	loggerConfig          logger.LoggerConfig
 	conversationSessionID string
-	loopDetector       *loop.LoopDetector
-	obsLogger          *logger.ObservabilityLogger
+	loopDetector          *loop.LoopDetector
+	obsLogger             *logger.ObservabilityLogger
 }
 
 // NewHandler creates a new proxy handler
@@ -39,10 +39,10 @@ func NewHandler(cfg *config.Config, obsLogger *logger.ObservabilityLogger, conve
 			cfg.DisableToolCorrectionLogging,
 			obsLogger,
 		),
-		loggerConfig:         logger.NewConfigAdapter(cfg),
+		loggerConfig:          logger.NewConfigAdapter(cfg),
 		conversationSessionID: conversationSessionID,
-		loopDetector:         loop.NewLoopDetector(),
-		obsLogger:           obsLogger,
+		loopDetector:          loop.NewLoopDetector(),
+		obsLogger:             obsLogger,
 	}
 }
 
@@ -71,7 +71,7 @@ func (h *Handler) HandleAnthropicRequest(w http.ResponseWriter, r *http.Request)
 		// Early error - no context yet
 		if h.obsLogger != nil {
 			h.obsLogger.Error(logger.ComponentProxy, logger.CategoryError, "", "Invalid JSON in request", map[string]interface{}{
-				"error": err.Error(),
+				"error":    err.Error(),
 				"raw_body": string(body),
 			})
 		}
@@ -598,23 +598,23 @@ func (h *Handler) sendStreamingResponse(w http.ResponseWriter, resp *types.Anthr
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
-	
+
 	// Generate message ID if not present
 	messageID := resp.ID
 	if messageID == "" {
 		messageID = fmt.Sprintf("msg_%d", time.Now().UnixNano())
 	}
-	
+
 	// Send message_start event
 	messageStartEvent := map[string]interface{}{
 		"type": "message_start",
 		"message": map[string]interface{}{
-			"id":           messageID,
-			"type":         "message",
-			"role":         "assistant", 
-			"model":        resp.Model,
-			"content":      []interface{}{},
-			"stop_reason":  nil,
+			"id":            messageID,
+			"type":          "message",
+			"role":          "assistant",
+			"model":         resp.Model,
+			"content":       []interface{}{},
+			"stop_reason":   nil,
 			"stop_sequence": nil,
 			"usage": map[string]interface{}{
 				"input_tokens":  resp.Usage.InputTokens,
@@ -622,14 +622,14 @@ func (h *Handler) sendStreamingResponse(w http.ResponseWriter, resp *types.Anthr
 			},
 		},
 	}
-	
+
 	h.writeSSEEvent(w, "message_start", messageStartEvent)
-	
+
 	// Send content blocks
 	for index, content := range resp.Content {
 		// Send content_block_start event
 		var contentBlock interface{}
-		
+
 		if content.Type == "text" {
 			contentBlock = map[string]interface{}{
 				"type": "text",
@@ -643,15 +643,15 @@ func (h *Handler) sendStreamingResponse(w http.ResponseWriter, resp *types.Anthr
 				"input": map[string]interface{}{},
 			}
 		}
-		
+
 		contentBlockStartEvent := map[string]interface{}{
 			"type":          "content_block_start",
 			"index":         index,
 			"content_block": contentBlock,
 		}
-		
+
 		h.writeSSEEvent(w, "content_block_start", contentBlockStartEvent)
-		
+
 		// Send content_block_delta events
 		if content.Type == "text" && content.Text != "" {
 			// Split text into chunks for realistic streaming simulation
@@ -661,13 +661,13 @@ func (h *Handler) sendStreamingResponse(w http.ResponseWriter, resp *types.Anthr
 					"type": "text_delta",
 					"text": chunk,
 				}
-				
+
 				deltaEvent := map[string]interface{}{
 					"type":  "content_block_delta",
 					"index": index,
 					"delta": delta,
 				}
-				
+
 				h.writeSSEEvent(w, "content_block_delta", deltaEvent)
 			}
 		} else if content.Type == "tool_use" {
@@ -677,30 +677,30 @@ func (h *Handler) sendStreamingResponse(w http.ResponseWriter, resp *types.Anthr
 				jsonChunks := h.splitJSONForStreaming(string(inputJSON))
 				for _, chunk := range jsonChunks {
 					delta := map[string]interface{}{
-						"type":        "input_json_delta", 
+						"type":         "input_json_delta",
 						"partial_json": chunk,
 					}
-					
+
 					deltaEvent := map[string]interface{}{
 						"type":  "content_block_delta",
 						"index": index,
 						"delta": delta,
 					}
-					
+
 					h.writeSSEEvent(w, "content_block_delta", deltaEvent)
 				}
 			}
 		}
-		
+
 		// Send content_block_stop event
 		contentBlockStopEvent := map[string]interface{}{
 			"type":  "content_block_stop",
 			"index": index,
 		}
-		
+
 		h.writeSSEEvent(w, "content_block_stop", contentBlockStopEvent)
 	}
-	
+
 	// Send message_delta event with final usage and stop_reason
 	messageDeltaEvent := map[string]interface{}{
 		"type": "message_delta",
@@ -712,31 +712,31 @@ func (h *Handler) sendStreamingResponse(w http.ResponseWriter, resp *types.Anthr
 			"output_tokens": resp.Usage.OutputTokens,
 		},
 	}
-	
+
 	h.writeSSEEvent(w, "message_delta", messageDeltaEvent)
-	
+
 	// Send message_stop event
 	messageStopEvent := map[string]interface{}{
 		"type": "message_stop",
 	}
-	
+
 	h.writeSSEEvent(w, "message_stop", messageStopEvent)
-	
+
 	logger.Info("🌊 Sent streaming response with %d content blocks", len(resp.Content))
 }
 
 // writeSSEEvent writes a single SSE event
 func (h *Handler) writeSSEEvent(w http.ResponseWriter, eventType string, data interface{}) {
 	fmt.Fprintf(w, "event: %s\n", eventType)
-	
+
 	dataJSON, err := json.Marshal(data)
 	if err != nil {
 		// Fallback to empty object if marshaling fails
 		dataJSON = []byte("{}")
 	}
-	
+
 	fmt.Fprintf(w, "data: %s\n\n", string(dataJSON))
-	
+
 	// Flush to ensure immediate delivery
 	if flusher, ok := w.(http.Flusher); ok {
 		flusher.Flush()
@@ -748,22 +748,22 @@ func (h *Handler) splitTextForStreaming(text string) []string {
 	// Split by words for realistic streaming experience
 	words := strings.Fields(text)
 	var chunks []string
-	
+
 	chunkSize := 3 // Stream ~3 words at a time
 	for i := 0; i < len(words); i += chunkSize {
 		end := i + chunkSize
 		if end > len(words) {
 			end = len(words)
 		}
-		
+
 		chunk := strings.Join(words[i:end], " ")
 		if i > 0 {
 			chunk = " " + chunk // Add space between chunks
 		}
-		
+
 		chunks = append(chunks, chunk)
 	}
-	
+
 	return chunks
 }
 
