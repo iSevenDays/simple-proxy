@@ -32,9 +32,10 @@ func TestHarmonyConfigurationDefaults(t *testing.T) {
 	}
 
 	// Test combined getter
-	enabled, debug, strict := cfg.GetHarmonyConfiguration()
-	if !enabled || debug || strict {
-		t.Errorf("GetHarmonyConfiguration() returned incorrect defaults: enabled=%v, debug=%v, strict=%v", enabled, debug, strict)
+	harmonyConfig := cfg.GetHarmonyConfiguration()
+	if !harmonyConfig.ParsingEnabled || harmonyConfig.Debug || harmonyConfig.StrictMode {
+		t.Errorf("GetHarmonyConfiguration() returned incorrect defaults: enabled=%v, debug=%v, strict=%v", 
+			harmonyConfig.ParsingEnabled, harmonyConfig.Debug, harmonyConfig.StrictMode)
 	}
 }
 

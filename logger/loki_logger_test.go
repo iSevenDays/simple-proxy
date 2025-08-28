@@ -7,6 +7,24 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// testLoggerConfig implements LoggerConfig for testing
+type testLoggerConfig struct {
+	minLevel    Level
+	maskAPIKeys bool
+}
+
+func (t *testLoggerConfig) ShouldLogForModel(model string) bool {
+	return true
+}
+
+func (t *testLoggerConfig) GetMinLogLevel() Level {
+	return t.minLevel
+}
+
+func (t *testLoggerConfig) ShouldMaskAPIKeys() bool {
+	return t.maskAPIKeys
+}
+
 func TestLokiLoggerBasic(t *testing.T) {
 	config := &testLoggerConfig{minLevel: DEBUG}
 	logger, err := NewLokiLogger(context.Background(), config, "http://localhost:3100")

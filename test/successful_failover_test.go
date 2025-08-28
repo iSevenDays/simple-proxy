@@ -323,7 +323,7 @@ func TestSuccessfulFailoverScenarios(t *testing.T) {
 			}),
 		}
 
-		handler := proxy.NewHandler(cfg, nil, nil)
+		handler := proxy.NewHandler(cfg, nil, "")
 		reqBody := `{"model":"claude-3-5-haiku-20241022","max_tokens":100,"messages":[{"role":"user","content":"Hello"}]}`
 
 		// First request - should fail and open circuit

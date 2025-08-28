@@ -181,7 +181,7 @@ func TestStreamingResponseReconstruction(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Create a handler to call the method
 			cfg := getTestConfig()
-			handler := proxy.NewHandler(cfg, nil, nil)
+			handler := proxy.NewHandler(cfg, nil, "")
 			
 			ctx := internal.WithRequestID(context.Background(), "stream_reconstruction_test")
 			result, err := handler.ReconstructResponseFromChunks(ctx, tt.chunks, tt.finalChunk)
@@ -238,7 +238,7 @@ data: [DONE]
 
 	// Create a handler to call the method
 	cfg := getTestConfig()
-	handler := proxy.NewHandler(cfg, nil, nil)
+	handler := proxy.NewHandler(cfg, nil, "")
 	
 	ctx := internal.WithRequestID(context.Background(), "stream_processing_test")
 	result, err := handler.ProcessStreamingResponse(ctx, resp)
@@ -259,7 +259,7 @@ data: [DONE]
 func TestEmptyStreamingResponse(t *testing.T) {
 	// Create a handler to call the method
 	cfg := getTestConfig()
-	handler := proxy.NewHandler(cfg, nil, nil)
+	handler := proxy.NewHandler(cfg, nil, "")
 	
 	ctx := internal.WithRequestID(context.Background(), "empty_stream_test")
 	_, err := handler.ReconstructResponseFromChunks(ctx, []types.OpenAIStreamChunk{}, nil)

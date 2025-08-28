@@ -80,7 +80,7 @@ func TestStreamingToolCallReconstruction_PartialChunks(t *testing.T) {
 
 	// Create a handler to call the method
 	cfg := getTestConfig()
-	handler := proxy.NewHandler(cfg, nil, nil)
+	handler := proxy.NewHandler(cfg, nil, "")
 	
 	ctx := internal.WithRequestID(context.Background(), "stream_test")
 	response, err := handler.ReconstructResponseFromChunks(ctx, chunks, finalChunk)

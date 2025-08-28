@@ -43,7 +43,7 @@ func TestBigModelCircuitBreakerBypass(t *testing.T) {
 			}),
 		}
 
-		handler := proxy.NewHandler(cfg, nil, nil)
+		handler := proxy.NewHandler(cfg, nil, "")
 
 		// Test big model request (should bypass circuit breaker)
 		reqBody := `{"model":"claude-3-5-sonnet-20241022","max_tokens":100,"messages":[{"role":"user","content":"Test"}]}`
@@ -115,7 +115,7 @@ func TestBigModelCircuitBreakerBypass(t *testing.T) {
 			}),
 		}
 
-		handler := proxy.NewHandler(cfg, nil, nil)
+		handler := proxy.NewHandler(cfg, nil, "")
 
 		// Test small model request (should use circuit breaker)
 		reqBody := `{"model":"claude-3-5-haiku-20241022","max_tokens":100,"messages":[{"role":"user","content":"Test"}]}`
