@@ -201,6 +201,21 @@ func TestIsHarmonyFormat(t *testing.T) {
 			input: "<|start|>assistant thinking without proper end",
 			want:  true,
 		},
+		{
+			name:  "has channel token only",
+			input: "Some text <|channel|>analysis and more text",
+			want:  true,
+		},
+		{
+			name:  "has message token only",
+			input: "Some text <|message|> and more text", 
+			want:  true,
+		},
+		{
+			name:  "has channel and message tokens",
+			input: "<|channel|>analysis<|message|>thinking content without end token",
+			want:  true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -530,6 +545,38 @@ func TestHarmonyParseError(t *testing.T) {
 	expected2 := "harmony parse error: test error without position"
 	if err2.Error() != expected2 {
 		t.Errorf("HarmonyParseError.Error() = %q, want %q", err2.Error(), expected2)
+	}
+}
+
+// Test Issue #10 - Fix Harmony detection for tool call scenarios
+// This test case reproduces the exact failing content from the Issue #10 logs
+func TestIssue10_ToolCallHarmonyDetection(t *testing.T) {
+	// This content has ONLY channel and message tokens - no start/end tokens
+	// This is the scenario that currently fails detection
+	content := `<|channel|>analysis<|message|>The user wants to "use LS tool in this folder". We need to interpret what exactly they're asking. They probably want to list files in the current working directory (which is /private/tmp per env). The LS tool takes an absolute path to a directory, not relative. We need to call LS with path="/private/tmp".`
+
+	// Test that IsHarmonyFormat detects this as Harmony content (currently fails)
+	if !IsHarmonyFormat(content) {
+		t.Error("IsHarmonyFormat() should return true for tool call Harmony scenario with channel/message tokens")
+	}
+
+	// The main requirement for Issue #10 is that IsHarmonyFormat should return true
+	// Even if channels can't be extracted due to incomplete sequence, detection should work
+	
+	// Test full ParseHarmonyMessage function
+	message, err := ParseHarmonyMessage(content)
+	if err != nil {
+		t.Errorf("ParseHarmonyMessage() returned error: %v", err)
+	}
+
+	if !message.HasHarmony {
+		t.Error("ParseHarmonyMessage() should detect Harmony format for tool call scenarios")
+	}
+
+	// For incomplete sequences without <|end|> token, extraction might fail
+	// but detection should work, and RawContent should be preserved
+	if message.RawContent != content {
+		t.Error("RawContent should be preserved even for incomplete Harmony sequences")
 	}
 }
 
