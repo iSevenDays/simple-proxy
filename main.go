@@ -33,6 +33,10 @@ func (s *simpleLoggerConfig) ShouldMaskAPIKeys() bool {
 }
 
 func main() {
+	// Print version information
+	fmt.Println(GetBuildInfo())
+	fmt.Println()
+
 	// Load configuration with .env support
 	cfg, err := config.LoadConfigWithEnv()
 	if err != nil {
@@ -82,6 +86,8 @@ func main() {
 			"big_model_endpoints": len(cfg.BigModelEndpoints),
 			"small_model_endpoints": len(cfg.SmallModelEndpoints),
 			"correction_endpoints": len(cfg.ToolCorrectionEndpoints),
+			"version": GetVersionInfo(),
+			"git_commit": GetGitCommit(),
 		})
 	}
 

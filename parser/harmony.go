@@ -522,15 +522,17 @@ func (e *HarmonyParseError) Error() string {
 //   - Channel tokens: <|channel|>type
 //   - Message tokens: <|message|>
 //   - Full sequences: Complete <|start|>...<|end|> blocks
+//   - Partial sequences: <|channel|>...<|end|> blocks (missing start token)
 //
 // TokenRecognizer instances should be created once and reused for
 // multiple parsing operations to amortize regex compilation costs.
 type TokenRecognizer struct {
-	startPattern   *regexp.Regexp
-	endPattern     *regexp.Regexp
-	channelPattern *regexp.Regexp
-	messagePattern *regexp.Regexp
-	fullPattern    *regexp.Regexp
+	startPattern     *regexp.Regexp
+	endPattern       *regexp.Regexp
+	channelPattern   *regexp.Regexp
+	messagePattern   *regexp.Regexp
+	fullPattern      *regexp.Regexp
+	partialPattern   *regexp.Regexp
 }
 
 // NewTokenRecognizer creates a new TokenRecognizer with all necessary
@@ -544,6 +546,7 @@ type TokenRecognizer struct {
 // Compiled patterns include:
 //   - Individual token recognition (start, end, channel, message)
 //   - Complete token sequence extraction (full Harmony blocks)
+//   - Partial token sequence extraction (missing start token)
 //   - Multiline content support with proper token boundary detection
 //
 // Returns:
@@ -580,10 +583,16 @@ func NewTokenRecognizer() (*TokenRecognizer, error) {
 		return nil, fmt.Errorf("failed to compile message pattern: %w", err)
 	}
 
-	// Full pattern for complete token sequences
+	// Full pattern for complete token sequences with start token
 	fullPattern, err := regexp.Compile(`(?s)<\|start\|>(\w+)(?:<\|channel\|>(\w+))?<\|message\|>(.*?)<\|end\|>`)
 	if err != nil {
 		return nil, fmt.Errorf("failed to compile full pattern: %w", err)
+	}
+
+	// Partial pattern for sequences without start token (fallback)
+	partialPattern, err := regexp.Compile(`(?s)<\|channel\|>(\w+)<\|message\|>(.*?)<\|end\|>`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to compile partial pattern: %w", err)
 	}
 
 	return &TokenRecognizer{
@@ -592,6 +601,7 @@ func NewTokenRecognizer() (*TokenRecognizer, error) {
 		channelPattern: channelPattern,
 		messagePattern: messagePattern,
 		fullPattern:    fullPattern,
+		partialPattern: partialPattern,
 	}, nil
 }
 
@@ -628,38 +638,67 @@ func (tr *TokenRecognizer) HasHarmonyTokens(content string) bool {
 // ExtractTokens extracts all complete Harmony token sequences from content,
 // returning structured match data for each found token block.
 //
-// This method identifies and extracts complete Harmony token sequences of the form:
-// <|start|>role<|channel|>type<|message|>content<|end|>
+// This method identifies and extracts Harmony token sequences in two forms:
+// 1. Complete: <|start|>role<|channel|>type<|message|>content<|end|>
+// 2. Partial: <|channel|>type<|message|>content<|end|> (missing start token)
 //
-// Each returned match is a string slice containing:
+// Each returned match is normalized to a 4-element string slice:
 //   - [0]: Full matched sequence
-//   - [1]: Role identifier (from start token)
-//   - [2]: Channel type (from channel token, may be empty)
+//   - [1]: Role identifier ("assistant" default for partial sequences)
+//   - [2]: Channel type (from channel token)
 //   - [3]: Message content (between message and end tokens)
 //
-// Incomplete or malformed token sequences are ignored, ensuring only
-// valid Harmony blocks are returned for further processing.
+// The function tries the full pattern first, then falls back to the partial
+// pattern for sequences missing the start token, ensuring compatibility
+// with various Harmony format variations.
 //
 // Parameters:
 //   - content: The text content to scan for complete token sequences
 //
 // Returns:
-//   - A slice of string slices, each representing one complete token sequence
-//   - Empty slice if no complete sequences are found
+//   - A slice of normalized 4-element string slices representing token sequences
+//   - Empty slice if no valid sequences are found
 //
-// Performance: O(n) where n is content length, with regex engine optimization.
+// Performance: O(n) where n is content length, with dual regex matching.
 //
 // Example:
 //
 //	matches := recognizer.ExtractTokens(content)
 //	for _, match := range matches {
-//		role := match[1]
-//		channel := match[2]
-//		message := match[3]
+//		role := match[1]      // "assistant" or actual role
+//		channel := match[2]   // channel type
+//		message := match[3]   // content
 //		// Process extracted token data
 //	}
 func (tr *TokenRecognizer) ExtractTokens(content string) [][]string {
-	return tr.fullPattern.FindAllStringSubmatch(content, -1)
+	// First try full pattern (with start token)
+	fullMatches := tr.fullPattern.FindAllStringSubmatch(content, -1)
+	
+	// If we found full matches, return those (don't look for partial matches that would overlap)
+	if len(fullMatches) > 0 {
+		return fullMatches
+	}
+	
+	// Only try partial pattern if no full matches found
+	partialMatches := tr.partialPattern.FindAllStringSubmatch(content, -1)
+	
+	var allMatches [][]string
+	
+	// Add partial matches, normalizing to include default role
+	for _, match := range partialMatches {
+		if len(match) >= 3 {
+			// Normalize to [full_match, role, channel, content] format
+			normalizedMatch := []string{
+				match[0],        // full matched sequence
+				"assistant",     // default role for partial sequences
+				match[1],        // channel type
+				match[2],        // message content
+			}
+			allMatches = append(allMatches, normalizedMatch)
+		}
+	}
+	
+	return allMatches
 }
 
 // Package-level default token recognizer for performance

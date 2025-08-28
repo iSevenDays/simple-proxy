@@ -4,6 +4,7 @@ import (
 	"claude-proxy/config"
 	"claude-proxy/correction"
 	"claude-proxy/logger"
+	"claude-proxy/parser"
 	"claude-proxy/types"
 	"context"
 	"encoding/json"
@@ -20,14 +21,14 @@ func getEmptyToolResultMessage(contentMap map[string]interface{}) string {
 	if errorMsg, ok := contentMap["error"].(string); ok && errorMsg != "" {
 		return fmt.Sprintf("Tool execution error: %s", errorMsg)
 	}
-	
+
 	// Check if we can infer tool type from tool_use_id pattern
 	if toolUseID, ok := contentMap["tool_use_id"].(string); ok {
 		// This is a simple heuristic - could be enhanced with actual tool tracking
 		toolType := inferToolTypeFromID(toolUseID)
 		return getToolSpecificEmptyMessage(toolType)
 	}
-	
+
 	// Generic fallback
 	return "Tool execution returned no results"
 }
@@ -64,14 +65,14 @@ func getToolSpecificEmptyMessage(toolType string) string {
 func FindValidToolSchema(corruptedTool types.Tool, availableTools []types.Tool) *types.Tool {
 	// First, check common mapping patterns for known corrupted tools
 	nameMapping := map[string]string{
-		"web_search": "WebSearch",
-		"websearch":  "WebSearch", 
-		"read_file":  "Read",
-		"write_file": "Write",
+		"web_search":   "WebSearch",
+		"websearch":    "WebSearch",
+		"read_file":    "Read",
+		"write_file":   "Write",
 		"bash_command": "Bash",
-		"grep_search": "Grep",
+		"grep_search":  "Grep",
 	}
-	
+
 	if mappedName, exists := nameMapping[strings.ToLower(corruptedTool.Name)]; exists {
 		for _, validTool := range availableTools {
 			if validTool.Name == mappedName && isValidToolSchema(validTool) {
@@ -79,18 +80,17 @@ func FindValidToolSchema(corruptedTool types.Tool, availableTools []types.Tool) 
 			}
 		}
 	}
-	
+
 	// Direct name match (case-insensitive) - only if it has a valid schema
 	for _, validTool := range availableTools {
 		if strings.EqualFold(corruptedTool.Name, validTool.Name) && isValidToolSchema(validTool) {
 			return &validTool
 		}
 	}
-	
+
 	// If no valid tool found in availableTools, provide a fallback schema for known tools
 	return types.GetFallbackToolSchema(corruptedTool.Name)
 }
-
 
 // isValidToolSchema checks if a tool has a valid schema
 func isValidToolSchema(tool types.Tool) bool {
@@ -103,20 +103,20 @@ func RestoreCorruptedToolSchema(tool *types.Tool, availableTools []types.Tool, l
 	if tool.InputSchema.Type != "" && tool.InputSchema.Properties != nil {
 		return false // Not corrupted
 	}
-	
+
 	logger.Debug("🔍 Attempting to restore corrupted schema for tool: %s", tool.Name)
-	
+
 	// Try to find a valid schema for this tool (now includes fallback schemas)
 	validTool := FindValidToolSchema(*tool, availableTools)
 	if validTool != nil {
 		originalName := tool.Name
 		*tool = *validTool // Copy the entire valid tool definition
-		logger.Info("✅ Schema restored: %s → %s (with fallback schema)", 
+		logger.Info("✅ Schema restored: %s → %s (with fallback schema)",
 			originalName, tool.Name)
 		return true
 	}
-	
-	logger.Warn("⚠️ Could not restore schema for tool: %s (no valid schema found)", 
+
+	logger.Warn("⚠️ Could not restore schema for tool: %s (no valid schema found)",
 		tool.Name)
 	return false
 }
@@ -126,7 +126,28 @@ func TransformAnthropicToOpenAI(ctx context.Context, req types.AnthropicRequest,
 	// Get logger from context
 	loggerConfig := logger.NewConfigAdapter(cfg)
 	loggerInstance := logger.FromContext(ctx, loggerConfig)
-	
+
+	// HARMONY DETECTION AND PROCESSING - Chain of responsibility pattern
+	// Check for Harmony format in messages and process if enabled
+	if cfg.IsHarmonyParsingEnabled() {
+		harmonyProcessed, err := processHarmonyMessages(ctx, &req, cfg, loggerInstance)
+		if err != nil {
+			if cfg.IsHarmonyStrictModeEnabled() {
+				// In strict mode, fail the request on Harmony parsing errors
+				return types.OpenAIRequest{}, fmt.Errorf("harmony parsing error: %v", err)
+			} else {
+				// In lenient mode, log warning and continue with fallback
+				loggerInstance.Warn("⚠️ Harmony parsing failed, falling back to standard processing: %v", err)
+			}
+		} else if harmonyProcessed {
+			// Harmony was successfully processed, request has been modified
+			if cfg.IsHarmonyDebugEnabled() {
+				loggerInstance.Debug("✅ Harmony format detected and processed successfully")
+			}
+		}
+		// If not Harmony format or processing failed in lenient mode, continue with standard transformation
+	}
+
 	openaiReq := types.OpenAIRequest{
 		Model:       req.Model,
 		MaxTokens:   req.MaxTokens,
@@ -146,23 +167,23 @@ func TransformAnthropicToOpenAI(ctx context.Context, req types.AnthropicRequest,
 
 		if len(systemParts) > 0 {
 			systemContent := strings.Join(systemParts, "\n")
-			
+
 			// Apply system message overrides if any are configured
-			if len(cfg.SystemMessageOverrides.RemovePatterns) > 0 || 
-			   len(cfg.SystemMessageOverrides.Replacements) > 0 ||
-			   cfg.SystemMessageOverrides.Prepend != "" ||
-			   cfg.SystemMessageOverrides.Append != "" {
+			if len(cfg.SystemMessageOverrides.RemovePatterns) > 0 ||
+				len(cfg.SystemMessageOverrides.Replacements) > 0 ||
+				cfg.SystemMessageOverrides.Prepend != "" ||
+				cfg.SystemMessageOverrides.Append != "" {
 				originalContent := systemContent
 				systemContent = config.ApplySystemMessageOverrides(systemContent, cfg.SystemMessageOverrides)
-				
+
 				logger.LogSystemOverride(ctx, loggerInstance, len(originalContent), len(systemContent))
 			}
-			
+
 			// Print system message if enabled
 			if cfg.PrintSystemMessage {
 				logger.LogSystemMessage(ctx, loggerInstance, len(systemContent), systemContent)
 			}
-			
+
 			openaiReq.Messages = append(openaiReq.Messages, types.OpenAIMessage{
 				Role:    "system",
 				Content: systemContent,
@@ -175,13 +196,13 @@ func TransformAnthropicToOpenAI(ctx context.Context, req types.AnthropicRequest,
 		openaiMsg := types.OpenAIMessage{
 			Role: msg.Role,
 		}
-		
+
 		// Log details of potentially problematic messages for debugging
 		if msg.Role == "assistant" {
 			hasText := false
 			hasToolUse := false
 			contentCount := 0
-			
+
 			switch content := msg.Content.(type) {
 			case []interface{}:
 				contentCount = len(content)
@@ -202,9 +223,9 @@ func TransformAnthropicToOpenAI(ctx context.Context, req types.AnthropicRequest,
 					contentCount = 1
 				}
 			}
-			
+
 			if !hasText && !hasToolUse {
-				loggerInstance.Warn("⚠️ Assistant message %d has no text or tool_use content (%d content items)", 
+				loggerInstance.Warn("⚠️ Assistant message %d has no text or tool_use content (%d content items)",
 					i, contentCount)
 				// Log the actual content structure for debugging
 				if contentBytes, err := json.Marshal(msg.Content); err == nil {
@@ -280,10 +301,10 @@ func TransformAnthropicToOpenAI(ctx context.Context, req types.AnthropicRequest,
 							} else {
 								// Apply system message overrides to tool result content
 								processedText := text
-								if len(cfg.SystemMessageOverrides.RemovePatterns) > 0 || 
-								   len(cfg.SystemMessageOverrides.Replacements) > 0 ||
-								   cfg.SystemMessageOverrides.Prepend != "" ||
-								   cfg.SystemMessageOverrides.Append != "" {
+								if len(cfg.SystemMessageOverrides.RemovePatterns) > 0 ||
+									len(cfg.SystemMessageOverrides.Replacements) > 0 ||
+									cfg.SystemMessageOverrides.Prepend != "" ||
+									cfg.SystemMessageOverrides.Append != "" {
 									processedText = config.ApplySystemMessageOverrides(text, cfg.SystemMessageOverrides)
 									if processedText != text {
 										logger.LogSystemOverride(ctx, loggerInstance, len(text), len(processedText))
@@ -328,7 +349,7 @@ func TransformAnthropicToOpenAI(ctx context.Context, req types.AnthropicRequest,
 		if openaiMsg.Content == "" && len(openaiMsg.ToolCalls) == 0 {
 			shouldAddContent := false
 			var defaultContent string
-			
+
 			switch openaiMsg.Role {
 			case "tool":
 				if cfg.HandleEmptyToolResults {
@@ -345,13 +366,13 @@ func TransformAnthropicToOpenAI(ctx context.Context, req types.AnthropicRequest,
 				// Let provider handle validation (will return proper error)
 				loggerInstance.Warn("⚠️ Empty assistant message (letting provider validate)")
 			}
-			
+
 			if shouldAddContent {
 				openaiMsg.Content = defaultContent
 				logger.LogDefaultContent(ctx, loggerInstance, openaiMsg.Role)
 			} else if openaiMsg.Content == "" && len(openaiMsg.ToolCalls) == 0 {
 				// Log but don't modify - let provider handle validation
-				loggerInstance.Warn("⚠️ Empty message: role=%s (letting provider validate)", 
+				loggerInstance.Warn("⚠️ Empty message: role=%s (letting provider validate)",
 					openaiMsg.Role)
 			}
 		}
@@ -368,27 +389,27 @@ func TransformAnthropicToOpenAI(ctx context.Context, req types.AnthropicRequest,
 		if len(contentPreview) > 100 && !strings.Contains(contentPreview, "InputValidationError") {
 			contentPreview = contentPreview[:100] + "..."
 		}
-		
+
 		// Build message info
 		msgInfo := fmt.Sprintf("🔍   Message %d: role=%s", i, msg.Role)
-		
+
 		// Add content_len if there's content
 		if len(msg.Content) > 0 {
 			msgInfo += fmt.Sprintf(", content_len=%d", len(msg.Content))
 		}
-		
+
 		// Add tool_calls if there are any
 		if len(msg.ToolCalls) > 0 {
 			msgInfo += fmt.Sprintf(", tool_calls=%d", len(msg.ToolCalls))
 		}
-		
+
 		// Add tool_call_id if present
 		if msg.ToolCallID != "" {
 			msgInfo += fmt.Sprintf(", tool_call_id=%s", msg.ToolCallID)
 		}
-		
+
 		modelLogger.Debug(msgInfo)
-		
+
 		// Show more informative logging for different message types
 		if len(msg.Content) == 0 && len(msg.ToolCalls) > 0 {
 			// Assistant message with only tool calls - show tool info instead of empty content
@@ -401,7 +422,7 @@ func TransformAnthropicToOpenAI(ctx context.Context, req types.AnthropicRequest,
 					if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &args); err == nil {
 						// Show actual parameter values for better debugging
 						var paramPairs []string
-						
+
 						// For specific tools, show the most relevant parameters
 						switch toolCall.Function.Name {
 						case "Read", "Write", "Edit", "MultiEdit":
@@ -499,7 +520,7 @@ func TransformAnthropicToOpenAI(ctx context.Context, req types.AnthropicRequest,
 								paramCount++
 							}
 						}
-						
+
 						if len(paramPairs) > 0 {
 							toolInfo += fmt.Sprintf("(%s)", strings.Join(paramPairs, ", "))
 						}
@@ -520,17 +541,17 @@ func TransformAnthropicToOpenAI(ctx context.Context, req types.AnthropicRequest,
 		// Context-aware tool filtering: Analyze conversation to determine appropriate tools
 		contextBasedSkipTools := make([]string, len(cfg.SkipTools))
 		copy(contextBasedSkipTools, cfg.SkipTools)
-		
+
 		// Check if conversation suggests research/analysis rather than planning
 		if shouldSkipExitPlanMode(ctx, req.Messages, cfg) {
 			contextBasedSkipTools = append(contextBasedSkipTools, "ExitPlanMode")
 			loggerInstance.Info("🔍 Context analysis: ExitPlanMode filtered out (research/analysis detected)")
 		}
-		
+
 		// Filter tools based on skip list (including context-based additions)
 		var filteredTools []types.Tool
 		var skippedTools []string
-		
+
 		for _, tool := range req.Tools {
 			shouldSkip := false
 			for _, skipTool := range contextBasedSkipTools {
@@ -544,17 +565,17 @@ func TransformAnthropicToOpenAI(ctx context.Context, req types.AnthropicRequest,
 				filteredTools = append(filteredTools, tool)
 			}
 		}
-		
+
 		// Log skipped tools if any
 		if len(skippedTools) > 0 {
 			logger.LogToolsSkipped(ctx, loggerInstance, len(skippedTools), skippedTools)
 		}
-		
+
 		// Print tool schemas if enabled (before transformation to see original Claude Code schemas)
 		if cfg.PrintToolSchemas && len(filteredTools) > 0 {
 			logger.LogToolSchemas(ctx, loggerInstance, filteredTools)
 		}
-		
+
 		// Transform filtered tools
 		if len(filteredTools) > 0 {
 			openaiReq.Tools = make([]types.OpenAITool, len(filteredTools))
@@ -562,22 +583,22 @@ func TransformAnthropicToOpenAI(ctx context.Context, req types.AnthropicRequest,
 				// Attempt to restore corrupted tool schemas before processing
 				if tool.InputSchema.Type == "" || tool.InputSchema.Properties == nil {
 					loggerInstance.Warn("⚠️ Malformed tool schema detected for %s, attempting restoration", tool.Name)
-					
+
 					// Try to restore the schema by finding a valid tool in the original request
 					if RestoreCorruptedToolSchema(&tool, req.Tools, loggerInstance) {
 						// Schema was restored, continue with processing
 						filteredTools[i] = tool // Update the tool in the slice
 					} else {
 						// Could not restore, log the corruption details
-						loggerInstance.Error("❌ Schema restoration failed for %s: type=%q, properties=%v, required=%v", 
+						loggerInstance.Error("❌ Schema restoration failed for %s: type=%q, properties=%v, required=%v",
 							tool.Name, tool.InputSchema.Type, tool.InputSchema.Properties, tool.InputSchema.Required)
 						loggerInstance.Debug("🔍 Original corrupted tool: %+v", tool)
 					}
 				}
-				
+
 				// Use YAML override description if available, otherwise use original
 				description := cfg.GetToolDescription(tool.Name, tool.Description)
-				
+
 				openaiReq.Tools[i] = types.OpenAITool{
 					Type: "function",
 					Function: types.OpenAIToolFunction{
@@ -586,16 +607,16 @@ func TransformAnthropicToOpenAI(ctx context.Context, req types.AnthropicRequest,
 						Parameters:  tool.InputSchema,
 					},
 				}
-				
+
 				// Verify transformation preserved schema correctly
 				if openaiReq.Tools[i].Function.Parameters.Type == "" && tool.InputSchema.Type != "" {
-					loggerInstance.Error("❌ Schema corruption during assignment for %s: input_type=%q → output_type=%q", 
+					loggerInstance.Error("❌ Schema corruption during assignment for %s: input_type=%q → output_type=%q",
 						tool.Name, tool.InputSchema.Type, openaiReq.Tools[i].Function.Parameters.Type)
 				}
 			}
 
 			logger.LogToolsTransformed(ctx, modelLogger, len(openaiReq.Tools), len(req.Tools))
-			
+
 			// Log first few tool names for debugging
 			toolNames := make([]string, len(openaiReq.Tools))
 			for i, tool := range openaiReq.Tools {
@@ -615,7 +636,7 @@ func TransformOpenAIToAnthropic(ctx context.Context, resp *types.OpenAIResponse,
 	// Set up logger for this function
 	loggerConfig := logger.NewConfigAdapter(cfg)
 	loggerInstance := logger.FromContext(ctx, loggerConfig)
-	
+
 	if len(resp.Choices) == 0 {
 		return nil, fmt.Errorf("no choices in OpenAI response")
 	}
@@ -627,10 +648,85 @@ func TransformOpenAIToAnthropic(ctx context.Context, resp *types.OpenAIResponse,
 
 	// Add text content if present
 	if choice.Message.Content != "" {
-		content = append(content, types.Content{
-			Type: "text",
-			Text: choice.Message.Content,
-		})
+		// Check for Harmony format and process if enabled
+		if cfg.IsHarmonyParsingEnabled() && parser.IsHarmonyFormat(choice.Message.Content) {
+			loggerInstance.Debug("🔍 Harmony tokens detected, performing full extraction")
+
+			harmonyMsg, err := parser.ParseHarmonyMessage(choice.Message.Content)
+			channelCount := 0
+			if harmonyMsg != nil {
+				channelCount = len(harmonyMsg.Channels)
+			}
+			loggerInstance.Debug("🔍 ParseHarmonyMessage result: err=%v, channels=%d", err, channelCount)
+			if err == nil && len(harmonyMsg.Channels) > 0 {
+				loggerInstance.Debug("✅ Successfully extracted %d Harmony channels", len(harmonyMsg.Channels))
+
+				// Handle both complete and partial Harmony sequences
+				var responseText string
+
+				// First, try to extract content after the last Harmony sequence (for partial sequences)
+				originalContent := choice.Message.Content
+				cleanContent := ""
+				tokens := parser.FindHarmonyTokens(originalContent)
+				if len(tokens) > 0 {
+					// Find the position of the last <|end|> token
+					lastEndPos := -1
+					for _, token := range tokens {
+						if token.Type == "end" && token.End > lastEndPos {
+							lastEndPos = token.End
+						}
+					}
+
+					// Extract content after the last <|end|> token (for partial sequences)
+					if lastEndPos > 0 && lastEndPos < len(originalContent) {
+						cleanContent = strings.TrimSpace(originalContent[lastEndPos:])
+					}
+				}
+
+				// Use the appropriate content source
+				if cleanContent != "" {
+					// Content after Harmony sequences (partial sequences like Issue #8)
+					responseText = cleanContent
+					loggerInstance.Debug("✅ Using content after Harmony sequences")
+				} else if harmonyMsg.ResponseText != "" {
+					// Response text from final channels (complete sequences)
+					responseText = harmonyMsg.ResponseText
+					loggerInstance.Debug("✅ Using ResponseText from Harmony channels")
+				} else {
+					// Fallback only if no response channels found
+					responseText = choice.Message.Content
+					loggerInstance.Debug("⚠️ No response content found, using original content")
+				}
+
+				content = append(content, types.Content{
+					Type: "text",
+					Text: responseText,
+				})
+
+				// TODO: Store thinking content for Claude Code UI
+				// This would be added to anthropicResp.ThinkingContent later
+				if harmonyMsg.ThinkingText != "" {
+					loggerInstance.Debug("💭 Extracted thinking content: %d characters", len(harmonyMsg.ThinkingText))
+				}
+
+			} else {
+				loggerInstance.Debug("🔍 Harmony tokens found but no channels extracted - treating as non-Harmony")
+				// Fallback to original content
+				content = append(content, types.Content{
+					Type: "text",
+					Text: choice.Message.Content,
+				})
+			}
+		} else {
+			if cfg.IsHarmonyParsingEnabled() {
+				loggerInstance.Debug("🔍 No Harmony tokens detected in content")
+			}
+			// Regular non-Harmony content
+			content = append(content, types.Content{
+				Type: "text",
+				Text: choice.Message.Content,
+			})
+		}
 	}
 
 	// Add tool calls if present
@@ -696,7 +792,7 @@ func shouldSkipExitPlanMode(ctx context.Context, messages []types.Message, cfg *
 	if cfg == nil || len(messages) == 0 {
 		return false
 	}
-	
+
 	// Extract the user's request (first message)
 	var userRequest string
 	for _, msg := range messages {
@@ -705,11 +801,11 @@ func shouldSkipExitPlanMode(ctx context.Context, messages []types.Message, cfg *
 			break // Only check the first user message for the initial intent
 		}
 	}
-	
+
 	if strings.TrimSpace(userRequest) == "" {
 		return false
 	}
-	
+
 	// Use LLM analysis for more nuanced understanding
 	return shouldSkipExitPlanModeLLM(ctx, strings.TrimSpace(userRequest), cfg)
 }
@@ -720,17 +816,17 @@ func shouldSkipExitPlanModeLLM(ctx context.Context, userRequest string, cfg *con
 	if strings.TrimSpace(userRequest) == "" {
 		return false
 	}
-	
+
 	// Use the correction service's dedicated context analysis method
 	correctionService := correction.NewService(cfg, cfg.ToolCorrectionAPIKey, true, cfg.CorrectionModel, false, nil)
-	
+
 	// Use the specialized AnalyzeRequestContext method
 	shouldFilter, err := correctionService.AnalyzeRequestContext(ctx, userRequest)
 	if err != nil {
 		// If LLM analysis fails, conservative fallback - don't filter
 		return false
 	}
-	
+
 	return shouldFilter
 }
 
@@ -750,4 +846,12 @@ func extractUserText(msg types.Message) string {
 		return strings.Join(texts, " ")
 	}
 	return ""
+}
+
+// processHarmonyMessages processes harmony format detection and parsing
+// This is a stub implementation for compilation - Issue #8 fix
+func processHarmonyMessages(ctx context.Context, req *types.AnthropicRequest, cfg *config.Config, loggerInstance logger.Logger) (bool, error) {
+	// For now, return false (not processed) to maintain existing behavior
+	// This function would be fully implemented as part of complete Harmony integration
+	return false, nil
 }

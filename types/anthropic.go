@@ -1,6 +1,9 @@
 package types
 
-import "strings"
+import (
+	"strings"
+	"claude-proxy/parser"
+)
 
 // AnthropicRequest represents a complete incoming request from Claude Code to the
 // proxy service, containing all necessary information for model routing and processing.
@@ -58,7 +61,7 @@ type AnthropicResponse struct {
 	
 	// Harmony parsing metadata (Issue #4)
 	ThinkingContent string            `json:"thinking_content,omitempty"` // Consolidated thinking text from analysis channels
-	HarmonyChannels []HarmonyChannel  `json:"harmony_channels,omitempty"` // Channel metadata for debugging
+	HarmonyChannels []parser.Channel  `json:"harmony_channels,omitempty"` // Channel metadata for debugging
 }
 
 // Message represents a single message within a conversation, supporting both

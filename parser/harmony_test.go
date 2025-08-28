@@ -532,3 +532,75 @@ func TestHarmonyParseError(t *testing.T) {
 		t.Errorf("HarmonyParseError.Error() = %q, want %q", err2.Error(), expected2)
 	}
 }
+
+// Test Issue #8 - Fix harmony parsing for content missing start token
+// This test case reproduces the exact failing content from the GitHub issue
+func TestIssue8_PartialHarmonySequence(t *testing.T) {
+	// This is the exact content that was failing in the issue logs
+	content := `<|channel|>analysis<|message|>The conversation: user asks "interesting!" (possibly a comment). We need to respond concisely, following guidelines: less than 4 lines, minimal. Likely respond with a short statement. Might ask if they have any specific request? The instruction says to be concise, no preamble. Possibly respond "What would you like to work on?" Keep under 4 lines. Use minimal text.
+
+<|end|>What would you like to work on today?`
+
+	// Test that IsHarmonyFormat detects this as Harmony content
+	if !IsHarmonyFormat(content) {
+		t.Error("IsHarmonyFormat() should return true for partial Harmony sequence")
+	}
+
+	// Test that ExtractChannels now successfully extracts the channel
+	channels := ExtractChannels(content)
+	if len(channels) == 0 {
+		t.Fatal("ExtractChannels() should extract channels from partial Harmony sequence, got 0 channels")
+	}
+
+	// Verify the extracted channel details
+	if len(channels) != 1 {
+		t.Errorf("ExtractChannels() should extract 1 channel, got %d", len(channels))
+	}
+
+	channel := channels[0]
+	
+	// Check role defaults to assistant for partial sequences
+	if channel.Role != RoleAssistant {
+		t.Errorf("Expected role 'assistant' for partial sequence, got %s", channel.Role.String())
+	}
+
+	// Check channel type is correctly parsed
+	if channel.ChannelType != ChannelAnalysis {
+		t.Errorf("Expected channel type 'analysis', got %s", channel.ChannelType.String())
+	}
+
+	// Check content type mapping
+	if channel.ContentType != ContentTypeThinking {
+		t.Errorf("Expected content type 'thinking', got %s", channel.ContentType.String())
+	}
+
+	// Check content is properly extracted (should only include content between <|message|> and <|end|>)
+	expectedContent := `The conversation: user asks "interesting!" (possibly a comment). We need to respond concisely, following guidelines: less than 4 lines, minimal. Likely respond with a short statement. Might ask if they have any specific request? The instruction says to be concise, no preamble. Possibly respond "What would you like to work on?" Keep under 4 lines. Use minimal text.`
+	
+	if channel.Content != expectedContent {
+		t.Errorf("Content mismatch.\nExpected: %q\nGot: %q", expectedContent, channel.Content)
+	}
+
+	// Test full ParseHarmonyMessage function
+	message, err := ParseHarmonyMessage(content)
+	if err != nil {
+		t.Errorf("ParseHarmonyMessage() returned error: %v", err)
+	}
+
+	if !message.HasHarmony {
+		t.Error("ParseHarmonyMessage() should detect Harmony format")
+	}
+
+	if len(message.Channels) != 1 {
+		t.Errorf("ParseHarmonyMessage() should find 1 channel, got %d", len(message.Channels))
+	}
+
+	if message.ThinkingText == "" {
+		t.Error("ParseHarmonyMessage() should populate ThinkingText for analysis channel")
+	}
+
+	// The consolidated thinking text should match the channel content
+	if message.ThinkingText != expectedContent {
+		t.Errorf("ThinkingText mismatch.\nExpected: %q\nGot: %q", expectedContent, message.ThinkingText)
+	}
+}
