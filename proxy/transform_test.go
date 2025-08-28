@@ -4,6 +4,7 @@ import (
 	"claude-proxy/config"
 	"claude-proxy/types"
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -259,5 +260,12 @@ func TestTransformOpenAIToAnthropic_HarmonyThinkingContent(t *testing.T) {
 	}
 	if responseBlock.Text != expectedResponse {
 		t.Errorf("Expected main response: %q, got: %q", expectedResponse, responseBlock.Text)
+	}
+	
+	// Verify no content blocks contain raw Harmony tokens
+	for i, block := range result.Content {
+		if strings.Contains(block.Text, "<|channel|>") || strings.Contains(block.Text, "<|message|>") || strings.Contains(block.Text, "<|end|>") {
+			t.Errorf("Content block %d contains raw Harmony tokens: %q", i, block.Text)
+		}
 	}
 }

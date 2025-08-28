@@ -386,8 +386,8 @@ func TransformAnthropicToOpenAI(ctx context.Context, req types.AnthropicRequest,
 	for i, msg := range openaiReq.Messages {
 		contentPreview := msg.Content
 		// Show full content for validation errors, otherwise truncate at 100 chars
-		if len(contentPreview) > 100 && !strings.Contains(contentPreview, "InputValidationError") {
-			contentPreview = contentPreview[:100] + "..."
+		if len(contentPreview) > 400 && !strings.Contains(contentPreview, "InputValidationError") {
+			contentPreview = contentPreview[:400] + "..."
 		}
 
 		// Build message info
@@ -694,9 +694,9 @@ func TransformOpenAIToAnthropic(ctx context.Context, resp *types.OpenAIResponse,
 					responseText = harmonyMsg.ResponseText
 					loggerInstance.Debug("✅ Using ResponseText from Harmony channels")
 				} else {
-					// Fallback only if no response channels found
-					responseText = choice.Message.Content
-					loggerInstance.Debug("⚠️ No response content found, using original content")
+					// No response channels found - set responseText to empty since we only have thinking content
+					responseText = ""
+					loggerInstance.Debug("⚠️ No response content found, only thinking content available")
 				}
 
 				// Add thinking content first (if present) for Claude Code UI compatibility
@@ -708,12 +708,15 @@ func TransformOpenAIToAnthropic(ctx context.Context, resp *types.OpenAIResponse,
 					loggerInstance.Debug("💭 Added thinking content block: %d characters", len(harmonyMsg.ThinkingText))
 				}
 
-				// Add main response content
-				content = append(content, types.Content{
-					Type: "text",
-					Text: responseText,
-				})
-				
+				// Add main response content only if we have actual response text (not raw Harmony tokens)
+				if responseText != "" {
+					content = append(content, types.Content{
+						Type: "text",
+						Text: responseText,
+					})
+					loggerInstance.Debug("✅ Added response text block: %d characters", len(responseText))
+				}
+
 				// Store harmony channels for debugging
 				harmonyChannels = harmonyMsg.Channels
 
@@ -773,13 +776,13 @@ func TransformOpenAIToAnthropic(ctx context.Context, resp *types.OpenAIResponse,
 
 	// Create Anthropic response
 	anthropicResp := &types.AnthropicResponse{
-		ID:             resp.ID,
-		Type:           "message",
-		Role:           "assistant",
-		Model:          model,
-		Content:        content,
-		StopReason:     stopReason,
-		StopSequence:   nil,
+		ID:              resp.ID,
+		Type:            "message",
+		Role:            "assistant",
+		Model:           model,
+		Content:         content,
+		StopReason:      stopReason,
+		StopSequence:    nil,
 		HarmonyChannels: harmonyChannels,
 		Usage: types.Usage{
 			InputTokens:  resp.Usage.PromptTokens,
