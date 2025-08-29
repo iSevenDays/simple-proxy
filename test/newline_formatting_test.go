@@ -286,7 +286,7 @@ func TestHarmonyMultiChannelParsing(t *testing.T) {
 				},
 			},
 			expectedText: "This is internal analysis content that should be extracted properly.",
-			expectedType: "text",
+			expectedType: "thinking",
 			description:  "Should extract analysis channel content as thinking content",
 		},
 		{
@@ -297,7 +297,7 @@ func TestHarmonyMultiChannelParsing(t *testing.T) {
 					{
 						Message: types.OpenAIMessage{
 							Role:    "assistant",
-							Content: `<|start|>assistant<|channel|>final<|message|>This is user-facing final content.\n\nWith proper formatting.<|return|>`,
+							Content: "<|start|>assistant<|channel|>final<|message|>This is user-facing final content.\n\nWith proper formatting.<|return|>",
 						},
 						FinishReason: stringPtr("stop"),
 					},

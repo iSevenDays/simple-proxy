@@ -568,7 +568,7 @@ func NewTokenRecognizer() (*TokenRecognizer, error) {
 		return nil, fmt.Errorf("failed to compile start pattern: %w", err)
 	}
 
-	endPattern, err := regexp.Compile(`<\|end\|>`)
+	endPattern, err := regexp.Compile(`<\|(?:end|return)\|>`)
 	if err != nil {
 		return nil, fmt.Errorf("failed to compile end pattern: %w", err)
 	}
@@ -584,13 +584,13 @@ func NewTokenRecognizer() (*TokenRecognizer, error) {
 	}
 
 	// Full pattern for complete token sequences with start token
-	fullPattern, err := regexp.Compile(`(?s)<\|start\|>(\w+)(?:<\|channel\|>(\w+))?<\|message\|>(.*?)<\|end\|>`)
+	fullPattern, err := regexp.Compile(`(?s)<\|start\|>(\w+)(?:<\|channel\|>(\w+))?<\|message\|>(.*?)<\|(?:end|return)\|>`)
 	if err != nil {
 		return nil, fmt.Errorf("failed to compile full pattern: %w", err)
 	}
 
 	// Partial pattern for sequences without start token (fallback)
-	partialPattern, err := regexp.Compile(`(?s)<\|channel\|>(\w+)<\|message\|>(.*?)<\|end\|>`)
+	partialPattern, err := regexp.Compile(`(?s)<\|channel\|>(\w+)<\|message\|>(.*?)<\|(?:end|return)\|>`)
 	if err != nil {
 		return nil, fmt.Errorf("failed to compile partial pattern: %w", err)
 	}
