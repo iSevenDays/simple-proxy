@@ -1177,3 +1177,453 @@ type TokenStats struct {
 	TotalTokens int            `json:"total_tokens"`
 	TokenCounts map[string]int `json:"token_counts"`
 }
+
+// HarmonyToken represents a parsed Harmony token with structural information
+// for robust parsing operations that handle malformed content.
+//
+// This struct provides a structured representation of individual Harmony tokens
+// found during content analysis, including position information and validation
+// status to support error recovery and graceful degradation.
+//
+// The token structure enables:
+//   - Position-based error reporting
+//   - Structural validation of token sequences
+//   - Recovery strategies for malformed content
+//   - Debug information for parsing issues
+type HarmonyToken struct {
+	Type     string `json:"type"`     // Token type: "start", "channel", "message", "end"
+	Role     string `json:"role"`     // Role for start tokens
+	Channel  string `json:"channel"`  // Channel type for channel tokens
+	Content  string `json:"content"`  // Content between tokens
+	Start    int    `json:"start"`    // Starting position in source
+	End      int    `json:"end"`      // Ending position in source
+	Valid    bool   `json:"valid"`    // Whether the token is structurally valid
+	Error    string `json:"error"`    // Error message if invalid
+}
+
+// ExtractTokensRobust performs comprehensive token extraction with error recovery
+// and malformed content handling, providing structured token information for
+// debugging and robust parsing operations.
+//
+// This function implements a multi-stage extraction process:
+//   1. Standard token extraction using existing patterns
+//   2. Malformed sequence detection and recovery
+//   3. Position-based error reporting
+//   4. Structural validation with detailed error context
+//
+// The robust extraction handles common malformed patterns:
+//   - Missing end tags
+//   - Incomplete token sequences
+//   - Invalid channel identifiers
+//   - Mixed content structures
+//   - Truncated responses
+//
+// Parameters:
+//   - content: Text content to analyze for Harmony tokens
+//
+// Returns:
+//   - A slice of HarmonyToken structs with validation status
+//   - Error if critical parsing failures occur
+//
+// Performance: O(n) where n is content length, with multiple validation passes.
+//
+// Example:
+//
+//	tokens, err := ExtractTokensRobust(content)
+//	for _, token := range tokens {
+//		if !token.Valid {
+//			fmt.Printf("Invalid token at %d: %s\n", token.Start, token.Error)
+//		}
+//	}
+func ExtractTokensRobust(content string) ([]HarmonyToken, error) {
+	var tokens []HarmonyToken
+	
+	// First, try standard token extraction
+	tokenPositions := FindHarmonyTokens(content)
+	
+	// Convert token positions to HarmonyToken structures
+	for _, pos := range tokenPositions {
+		token := HarmonyToken{
+			Type:    pos.Type,
+			Start:   pos.Start,
+			End:     pos.End,
+			Valid:   true,
+			Error:   "",
+		}
+		
+		// Extract type-specific information
+		switch pos.Type {
+		case "start":
+			token.Role = pos.Value
+		case "channel":
+			token.Channel = pos.Value
+		}
+		
+		tokens = append(tokens, token)
+	}
+	
+	// Detect malformed sequences and add them as invalid tokens
+	malformedSequences := extractMalformedSequences(content)
+	for _, seq := range malformedSequences {
+		token := HarmonyToken{
+			Type:    "malformed",
+			Content: seq,
+			Start:   strings.Index(content, seq),
+			End:     strings.Index(content, seq) + len(seq),
+			Valid:   false,
+			Error:   "malformed token sequence detected",
+		}
+		tokens = append(tokens, token)
+	}
+	
+	return tokens, nil
+}
+
+// extractMalformedSequences identifies common malformed Harmony patterns
+// that standard parsing cannot handle, enabling recovery strategies.
+//
+// This function uses pattern matching to identify:
+//   - Incomplete token sequences (missing end tags)
+//   - Invalid channel identifiers
+//   - Truncated responses
+//   - Mixed content with partial tokens
+//
+// Parameters:
+//   - content: Text content to analyze for malformed patterns
+//
+// Returns:
+//   - A slice of strings containing malformed sequences found
+//
+// Performance: O(n) where n is content length.
+func extractMalformedSequences(content string) []string {
+	var malformed []string
+	
+	// Pattern 1: Missing end tags - content with start/channel/message but no end
+	// Look for sequences that don't end with <|end|>
+	missingEndPattern := regexp.MustCompile(`(?s)<\|start\|>\w+(?:<\|channel\|>\w+)?<\|message\|>[^<]*$`)
+	matches := missingEndPattern.FindAllString(content, -1)
+	malformed = append(malformed, matches...)
+	
+	// Pattern 2: Invalid channels - channels that don't match expected patterns
+	invalidChannelPattern := regexp.MustCompile(`<\|channel\|>[^a-zA-Z_][^<]*`)
+	matches = invalidChannelPattern.FindAllString(content, -1)
+	malformed = append(malformed, matches...)
+	
+	// Pattern 3: Incomplete structures - find tokens at end without proper closing
+	incompletePattern := regexp.MustCompile(`<\|(?:start|channel|message)\|>[^<]*$`)
+	matches = incompletePattern.FindAllString(content, -1)
+	malformed = append(malformed, matches...)
+	
+	return malformed
+}
+
+// cleanMalformedContent attempts to repair common malformed Harmony patterns
+// by applying heuristic fixes and content normalization.
+//
+// This function implements recovery strategies for:
+//   - Adding missing end tags
+//   - Normalizing channel identifiers
+//   - Reconstructing incomplete sequences
+//   - Removing invalid token fragments
+//
+// Parameters:
+//   - content: Malformed Harmony content to repair
+//
+// Returns:
+//   - Cleaned content with attempted repairs applied
+//
+// Performance: O(n) where n is content length.
+func cleanMalformedContent(content string) string {
+	cleaned := content
+	
+	// Fix 1: Add missing end tags for incomplete sequences
+	missingEndPattern := regexp.MustCompile(`(?s)(<\|start\|>\w+(?:<\|channel\|>\w+)?<\|message\|>.*)$`)
+	cleaned = missingEndPattern.ReplaceAllString(cleaned, "$1<|end|>")
+	
+	// Fix 2: Normalize invalid channel identifiers to "final"
+	invalidChannelPattern := regexp.MustCompile(`<\|channel\|>[^a-zA-Z_][^<]*`)
+	cleaned = invalidChannelPattern.ReplaceAllString(cleaned, "<|channel|>final")
+	
+	// Fix 3: Remove incomplete token fragments at end
+	incompleteTokenPattern := regexp.MustCompile(`<\|[^|]*(?:\|[^>]*)?[^>]*$`)
+	cleaned = incompleteTokenPattern.ReplaceAllString(cleaned, "")
+	
+	// Fix 4: Wrap orphaned content in proper tokens
+	orphanedContentPattern := regexp.MustCompile(`(?s)^([^<]*)<\|(?:channel|message)\|>`)
+	cleaned = orphanedContentPattern.ReplaceAllString(cleaned, "<|start|>assistant<|channel|>final<|message|>$1<|end|>")
+	
+	return cleaned
+}
+
+// ParseHarmonyMessageRobust provides comprehensive Harmony message parsing
+// with error recovery, malformed content handling, and graceful degradation.
+//
+// This function implements a multi-level parsing strategy:
+//   1. Standard parsing using existing ParseHarmonyMessage
+//   2. Robust token extraction for malformed content
+//   3. Content cleaning and repair attempts  
+//   4. Fallback to raw content with error logging
+//
+// The robust parsing ensures that no content is lost, even when malformed:
+//   - Attempts standard parsing first
+//   - Falls back to cleaning and re-parsing
+//   - Finally provides raw content as fallback
+//   - Collects all errors for debugging
+//
+// Parameters:
+//   - content: Text content potentially containing malformed Harmony format
+//
+// Returns:
+//   - A HarmonyMessage struct with maximum extracted information
+//   - Error details in ParseErrors field, never returns parsing errors directly
+//
+// Performance: O(n*m) where n is content length and m is number of repair attempts.
+//
+// Example:
+//
+//	message, _ := ParseHarmonyMessageRobust(malformedContent)
+//	if len(message.ParseErrors) > 0 {
+//		fmt.Printf("Parsing issues detected: %d errors\n", len(message.ParseErrors))
+//	}
+//	// message.ResponseText will contain best available content
+func ParseHarmonyMessageRobust(content string) (*HarmonyMessage, error) {
+	// Attempt 1: Standard parsing
+	message, err := ParseHarmonyMessage(content)
+	if err == nil && message.HasHarmony && len(message.Channels) > 0 {
+		return message, nil
+	}
+	
+	// Attempt 2: Robust token extraction with error recovery
+	tokens, tokenErr := ExtractTokensRobust(content)
+	
+	// Attempt 3: Content cleaning and re-parsing
+	cleanedContent := cleanMalformedContent(content)
+	if cleanedContent != content {
+		cleanedMessage, cleanErr := ParseHarmonyMessage(cleanedContent)
+		if cleanErr == nil && cleanedMessage.HasHarmony && len(cleanedMessage.Channels) > 0 {
+			// Add error information about the cleaning and preserve original raw content
+			cleanedMessage.ParseErrors = append(cleanedMessage.ParseErrors, 
+				fmt.Errorf("content required cleaning for successful parsing"))
+			cleanedMessage.RawContent = content // Preserve original content, not cleaned
+			return cleanedMessage, nil
+		}
+	}
+	
+	// Fallback: Provide best available content with error information
+	var fallbackMessage *HarmonyMessage
+	if message != nil {
+		// Use the partially parsed message from standard parsing
+		fallbackMessage = message
+	} else {
+		// Create new message structure
+		fallbackMessage = &HarmonyMessage{
+			Channels:     []Channel{},
+			RawContent:   content,
+			HasHarmony:   len(tokens) > 0, // Consider it Harmony if we found any tokens
+			ParseErrors:  []error{},
+			ThinkingText: "",
+			ResponseText: "",
+			ToolCallText: "",
+		}
+	}
+	
+	// Ensure raw content is preserved
+	fallbackMessage.RawContent = content
+	
+	// If we don't have any meaningful parsed content, use raw content as response
+	if fallbackMessage.ResponseText == "" && fallbackMessage.ThinkingText == "" && len(fallbackMessage.Channels) == 0 {
+		fallbackMessage.ResponseText = content
+	}
+	
+	// Add parsing error information
+	if err != nil {
+		fallbackMessage.ParseErrors = append(fallbackMessage.ParseErrors, err)
+	}
+	if tokenErr != nil {
+		fallbackMessage.ParseErrors = append(fallbackMessage.ParseErrors, tokenErr)
+	}
+	
+	// Add error for each invalid token
+	for _, token := range tokens {
+		if !token.Valid {
+			fallbackMessage.ParseErrors = append(fallbackMessage.ParseErrors, 
+				fmt.Errorf("invalid token at position %d: %s", token.Start, token.Error))
+		}
+	}
+	
+	return fallbackMessage, nil
+}
+
+// ExtractChannelsRobust performs channel extraction with comprehensive error
+// handling and recovery strategies for malformed Harmony content.
+//
+// This function provides the most reliable channel extraction available:
+//   1. Standard channel extraction using ExtractChannels
+//   2. Robust token-based extraction for malformed content
+//   3. Heuristic content reconstruction
+//   4. Fallback channel generation for unstructured content
+//
+// The extraction ensures that meaningful content is never lost:
+//   - Attempts standard extraction first
+//   - Uses robust token analysis for partial recovery
+//   - Creates synthetic channels for unstructured content
+//   - Preserves all content with appropriate classification
+//
+// Parameters:
+//   - content: Text content potentially containing malformed Harmony channels
+//
+// Returns:
+//   - A slice of Channel structs with maximum extracted information
+//   - Error if critical extraction failures occur
+//
+// Performance: O(n*m) where n is content length and m is number of extraction attempts.
+//
+// Example:
+//
+//	channels, err := ExtractChannelsRobust(malformedContent)
+//	if err != nil {
+//		fmt.Printf("Extraction error: %v\n", err)
+//	}
+//	for _, channel := range channels {
+//		fmt.Printf("Channel: %s, Content: %s\n", channel.ChannelType, channel.Content)
+//	}
+func ExtractChannelsRobust(content string) ([]HarmonyChannel, error) {
+	var channels []HarmonyChannel
+	
+	// Attempt 1: Standard channel extraction
+	standardChannels := ExtractChannels(content)
+	if len(standardChannels) > 0 {
+		// Convert to HarmonyChannel format (assuming it's the same structure)
+		for _, ch := range standardChannels {
+			harmonyChannel := HarmonyChannel{
+				Role:        ch.Role,
+				ChannelType: ch.ChannelType,
+				ContentType: ch.ContentType,
+				Content:     ch.Content,
+				RawChannel:  ch.RawChannel,
+				Valid:       true,
+				Error:       "",
+			}
+			channels = append(channels, harmonyChannel)
+		}
+		return channels, nil
+	}
+	
+	// Attempt 2: Robust token-based extraction
+	tokens, err := ExtractTokensRobust(content)
+	if err != nil {
+		return nil, fmt.Errorf("robust token extraction failed: %w", err)
+	}
+	
+	// For malformed content, try to reconstruct channels by analyzing the content
+	// between tokens and extracting meaningful sequences
+	if len(tokens) > 0 {
+		// Extract content between message tokens and end tokens (or end of content)
+		messageContent := extractContentBetweenTokens(content, tokens)
+		
+		if messageContent != "" {
+			// Try to determine the channel type based on any channel token found
+			channelType := ChannelFinal // Default
+			for _, token := range tokens {
+				if token.Type == "channel" && token.Channel != "" {
+					channelType = ParseChannelType(token.Channel)
+					break
+				}
+			}
+			
+			channel := HarmonyChannel{
+				Role:        RoleAssistant,
+				ChannelType: channelType,
+				ContentType: DetermineContentType(channelType),
+				Content:     strings.TrimSpace(messageContent),
+				RawChannel:  channelType.String(),
+				Valid:       false,
+				Error:       "reconstructed from malformed content",
+			}
+			channels = append(channels, channel)
+		}
+	}
+	
+	// Attempt 3: Fallback - create a single channel with all content
+	if len(channels) == 0 && content != "" {
+		channel := HarmonyChannel{
+			Role:        RoleAssistant,
+			ChannelType: ChannelFinal,
+			ContentType: ContentTypeResponse,
+			Content:     strings.TrimSpace(content),
+			RawChannel:  "fallback",
+			Valid:       false,
+			Error:       "no structured channels found, using fallback",
+		}
+		channels = append(channels, channel)
+	}
+	
+	return channels, nil
+}
+
+// extractContentBetweenTokens attempts to extract meaningful content between
+// Harmony tokens when standard parsing fails, used for malformed content recovery.
+//
+// This function analyzes token positions to find content that appears after
+// message tokens, providing a fallback mechanism for content extraction when
+// the token structure is incomplete or malformed.
+//
+// Parameters:
+//   - content: The original content string
+//   - tokens: Slice of HarmonyToken structs with position information
+//
+// Returns:
+//   - Extracted content string, empty if no meaningful content found
+func extractContentBetweenTokens(content string, tokens []HarmonyToken) string {
+	var extractedContent strings.Builder
+	
+	// Find the last message token position
+	lastMessagePos := -1
+	for _, token := range tokens {
+		if token.Type == "message" && token.End > lastMessagePos {
+			lastMessagePos = token.End
+		}
+	}
+	
+	if lastMessagePos >= 0 && lastMessagePos < len(content) {
+		// Extract content from after the message token to the end (or next token)
+		remaining := content[lastMessagePos:]
+		
+		// Find the next token that might terminate the content
+		nextTokenPos := len(remaining)
+		for _, token := range tokens {
+			if token.Start > lastMessagePos {
+				relativePos := token.Start - lastMessagePos
+				if relativePos < nextTokenPos {
+					nextTokenPos = relativePos
+				}
+			}
+		}
+		
+		if nextTokenPos > 0 {
+			extractedContent.WriteString(remaining[:nextTokenPos])
+		}
+	}
+	
+	return strings.TrimSpace(extractedContent.String())
+}
+
+// HarmonyChannel represents an extended Channel structure with validation
+// information for robust parsing operations.
+//
+// This struct extends the standard Channel with additional fields for:
+//   - Validation status and error reporting
+//   - Recovery and repair operation tracking
+//   - Debug information for malformed content
+//
+// The extended structure enables comprehensive error handling while
+// maintaining compatibility with existing Channel-based code.
+type HarmonyChannel struct {
+	Role        Role        `json:"role"`
+	ChannelType ChannelType `json:"channel_type"`
+	ContentType ContentType `json:"content_type"`
+	Content     string      `json:"content"`
+	RawChannel  string      `json:"raw_channel,omitempty"`
+	Valid       bool        `json:"valid"`       // Whether the channel is structurally valid
+	Error       string      `json:"error"`       // Error message if invalid
+}
