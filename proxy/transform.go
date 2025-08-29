@@ -653,12 +653,12 @@ func TransformOpenAIToAnthropic(ctx context.Context, resp *types.OpenAIResponse,
 		if cfg.IsHarmonyParsingEnabled() && parser.IsHarmonyFormat(choice.Message.Content) {
 			loggerInstance.Debug("🔍 Harmony tokens detected, performing full extraction")
 
-			harmonyMsg, err := parser.ParseHarmonyMessage(choice.Message.Content)
+			harmonyMsg, err := parser.ParseHarmonyMessageRobust(choice.Message.Content)
 			channelCount := 0
 			if harmonyMsg != nil {
 				channelCount = len(harmonyMsg.Channels)
 			}
-			loggerInstance.Debug("🔍 ParseHarmonyMessage result: err=%v, channels=%d", err, channelCount)
+			loggerInstance.Debug("🔍 ParseHarmonyMessageRobust result: err=%v, channels=%d", err, channelCount)
 			if err == nil && len(harmonyMsg.Channels) > 0 {
 				loggerInstance.Debug("✅ Successfully extracted %d Harmony channels", len(harmonyMsg.Channels))
 
