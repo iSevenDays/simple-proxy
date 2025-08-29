@@ -8,13 +8,91 @@ import (
 	"claude-proxy/parser"
 	"claude-proxy/types"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
+	"time"
 )
 
 // Context key for storing ContextManager between request and response transformations
 type contextManagerKey struct{}
+
+// SessionCache provides thread-safe storage for ContextManagers by session
+type SessionCache struct {
+	cache map[string]*CacheEntry
+	mutex sync.RWMutex
+}
+
+// CacheEntry holds a ContextManager with metadata
+type CacheEntry struct {
+	ContextManager *harmony.ContextManager
+	LastAccessed   time.Time
+	CreatedAt      time.Time
+}
+
+// Global session cache for ContextManager persistence
+var globalSessionCache = &SessionCache{
+	cache: make(map[string]*CacheEntry),
+}
+
+// generateSessionID creates a session ID from request messages for conversation continuity
+func generateSessionID(req *types.AnthropicRequest) string {
+	if len(req.Messages) == 0 {
+		return "default-" + fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+	
+	// Use first message content, model, and timestamp to create collision-resistant session ID
+	h := sha256.New()
+	h.Write([]byte(req.Model))
+	if len(req.Messages) > 0 {
+		if content, ok := req.Messages[0].Content.(string); ok {
+			h.Write([]byte(content))
+		}
+	}
+	// Add timestamp to prevent collision between similar conversations
+	h.Write([]byte(fmt.Sprintf("%d", time.Now().Unix())))
+	
+	// Use full hash to minimize collision risk
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// GetContextManager retrieves or creates a ContextManager for a session
+func (sc *SessionCache) GetContextManager(sessionID string) *harmony.ContextManager {
+	sc.mutex.Lock()
+	defer sc.mutex.Unlock()
+	
+	entry, exists := sc.cache[sessionID]
+	if exists {
+		entry.LastAccessed = time.Now()
+		return entry.ContextManager
+	}
+	
+	// Create new ContextManager for session
+	cm := harmony.NewContextManager()
+	sc.cache[sessionID] = &CacheEntry{
+		ContextManager: cm,
+		LastAccessed:   time.Now(),
+		CreatedAt:      time.Now(),
+	}
+	
+	return cm
+}
+
+// CleanupExpiredSessions removes old sessions (called periodically)
+func (sc *SessionCache) CleanupExpiredSessions(maxAge time.Duration) {
+	sc.mutex.Lock()
+	defer sc.mutex.Unlock()
+	
+	cutoff := time.Now().Add(-maxAge)
+	for sessionID, entry := range sc.cache {
+		if entry.LastAccessed.Before(cutoff) {
+			delete(sc.cache, sessionID)
+		}
+	}
+}
 
 // withContextManager stores the ContextManager in the context
 func withContextManager(ctx context.Context, cm *harmony.ContextManager) context.Context {
@@ -146,7 +224,9 @@ func TransformAnthropicToOpenAI(ctx context.Context, req types.AnthropicRequest,
 	loggerInstance := logger.FromContext(ctx, loggerConfig)
 
 	// Create ContextManager for Harmony compliance (OpenAI Harmony guide point 3)
-	contextManager := harmony.NewContextManager()
+	// Get or create ContextManager for this session to maintain conversation state
+	sessionID := generateSessionID(&req)
+	contextManager := globalSessionCache.GetContextManager(sessionID)
 
 	// HARMONY DETECTION AND PROCESSING - Chain of responsibility pattern
 	// Check for Harmony format in messages and process if enabled

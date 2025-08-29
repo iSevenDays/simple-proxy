@@ -8,6 +8,7 @@ import (
 	"claude-proxy/types"
 	"fmt"
 	"strings"
+	"sync"
 )
 
 // ContextManager manages conversation history and implements OpenAI Harmony format
@@ -17,11 +18,19 @@ import (
 // The model is able to call tools as part of its chain-of-thought and because of that,
 // we should pass the previous chain-of-thought back in as input for subsequent sampling."
 type ContextManager struct {
+	mu                  sync.RWMutex // Protects all fields for thread safety
 	history             []types.Message
 	preservedAnalysis   []string
 	lastMessageType     MessageType
 	lastFinalMessageIdx int // Index of the last message with final channel
 }
+
+// Constants for memory management
+const (
+	// MaxHistoryLength defines the maximum number of messages to keep in history
+	// This prevents unbounded memory growth in long conversations
+	MaxHistoryLength = 50
+)
 
 // MessageType represents the type of the last assistant message for preservation logic
 type MessageType int
@@ -81,6 +90,9 @@ func NewContextManager() *ContextManager {
 // Parameters:
 //   - message: The new message to add to conversation history
 func (cm *ContextManager) UpdateHistory(message types.Message) {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+	
 	cm.history = append(cm.history, message)
 	
 	// Only analyze assistant messages for preservation logic
@@ -103,6 +115,9 @@ func (cm *ContextManager) UpdateHistory(message types.Message) {
 	if hasToolCall {
 		cm.updatePreservedAnalysis(analysisContent)
 	}
+	
+	// Enforce memory bounds - keep only the most recent messages
+	cm.enforceMemoryBounds()
 }
 
 // analyzeMessage examines a message to determine its type and extract relevant content
@@ -140,7 +155,14 @@ func (cm *ContextManager) analyzeMessage(message types.Message) (MessageType, bo
 		case "tool_use":
 			hasToolCall = true
 		case "thinking":
-			// Thinking content should be preserved if followed by tool calls
+			// Thinking content (analysis channel) should be preserved if followed by tool calls
+			if analysisContent.Len() > 0 {
+				analysisContent.WriteString("\n")
+			}
+			analysisContent.WriteString(content.Text)
+		case "commentary":
+			// Commentary channel content should also be preserved according to Harmony spec
+			// "Function calls to the commentary channel can remain"
 			if analysisContent.Len() > 0 {
 				analysisContent.WriteString("\n")
 			}
@@ -193,12 +215,13 @@ func (cm *ContextManager) updatePreservedAnalysis(currentAnalysis string) {
 			switch content := message.Content.(type) {
 			case []types.Content:
 				for _, item := range content {
-					if item.Type == "thinking" && item.Text != "" {
+					// Preserve both thinking (analysis) and commentary channels per Harmony spec
+					if (item.Type == "thinking" || item.Type == "commentary") && item.Text != "" {
 						cm.preservedAnalysis = append(cm.preservedAnalysis, item.Text)
 					}
 				}
 			case string:
-				// String content doesn't have thinking components
+				// String content doesn't have thinking/commentary components
 				continue
 			default:
 				// Skip unknown content types
@@ -223,6 +246,9 @@ func (cm *ContextManager) updatePreservedAnalysis(currentAnalysis string) {
 //   - true if the last assistant message contained tool calls
 //   - false if the last assistant message was a final response
 func (cm *ContextManager) ShouldPreserveAnalysis() bool {
+	cm.mu.RLock()
+	defer cm.mu.RUnlock()
+	
 	return cm.lastMessageType == MessageTypeToolCall
 }
 
@@ -236,7 +262,10 @@ func (cm *ContextManager) ShouldPreserveAnalysis() bool {
 //   - A slice of strings containing preserved analysis content
 //   - Empty slice if no analysis should be preserved
 func (cm *ContextManager) GetPreservedAnalysis() []string {
-	if !cm.ShouldPreserveAnalysis() {
+	cm.mu.RLock()
+	defer cm.mu.RUnlock()
+	
+	if cm.lastMessageType != MessageTypeToolCall {
 		return make([]string, 0)
 	}
 	
@@ -252,6 +281,9 @@ func (cm *ContextManager) GetPreservedAnalysis() []string {
 // This implements the normal case where analysis messages are dropped after
 // final channel messages, as specified in the OpenAI Harmony guide.
 func (cm *ContextManager) ClearPreservedAnalysis() {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+	
 	cm.preservedAnalysis = make([]string, 0)
 	cm.lastMessageType = MessageTypeFinal
 }
@@ -263,6 +295,9 @@ func (cm *ContextManager) ClearPreservedAnalysis() {
 //   - The MessageType of the most recent assistant message
 //   - MessageTypeUnknown if no assistant messages exist
 func (cm *ContextManager) GetLastMessageType() MessageType {
+	cm.mu.RLock()
+	defer cm.mu.RUnlock()
+	
 	return cm.lastMessageType
 }
 
@@ -272,6 +307,9 @@ func (cm *ContextManager) GetLastMessageType() MessageType {
 // Returns:
 //   - The number of messages in the conversation history
 func (cm *ContextManager) GetHistoryLength() int {
+	cm.mu.RLock()
+	defer cm.mu.RUnlock()
+	
 	return len(cm.history)
 }
 
@@ -281,6 +319,9 @@ func (cm *ContextManager) GetHistoryLength() int {
 // Returns:
 //   - The number of analysis messages currently preserved
 func (cm *ContextManager) GetPreservedAnalysisCount() int {
+	cm.mu.RLock()
+	defer cm.mu.RUnlock()
+	
 	return len(cm.preservedAnalysis)
 }
 
@@ -294,7 +335,10 @@ func (cm *ContextManager) GetPreservedAnalysisCount() int {
 //   - Formatted string containing preserved analysis in Harmony format
 //   - Empty string if no analysis should be preserved
 func (cm *ContextManager) BuildPreservedContext() string {
-	if !cm.ShouldPreserveAnalysis() || len(cm.preservedAnalysis) == 0 {
+	cm.mu.RLock()
+	defer cm.mu.RUnlock()
+	
+	if cm.lastMessageType != MessageTypeToolCall || len(cm.preservedAnalysis) == 0 {
 		return ""
 	}
 	
@@ -326,10 +370,13 @@ func (cm *ContextManager) BuildPreservedContext() string {
 //   - A slice of validation errors found
 //   - Empty slice if all compliance checks pass
 func (cm *ContextManager) ValidateHarmonyCompliance() []error {
+	cm.mu.RLock()
+	defer cm.mu.RUnlock()
+	
 	var errors []error
 	
 	// Check 1: Verify preservation state consistency
-	if cm.ShouldPreserveAnalysis() && len(cm.preservedAnalysis) == 0 {
+	if cm.lastMessageType == MessageTypeToolCall && len(cm.preservedAnalysis) == 0 {
 		errors = append(errors, fmt.Errorf("preservation flag set but no analysis content preserved"))
 	}
 	
@@ -367,6 +414,9 @@ func (cm *ContextManager) ValidateHarmonyCompliance() []error {
 // This method is useful for starting fresh conversations or clearing
 // accumulated state for testing purposes.
 func (cm *ContextManager) Reset() {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+	
 	cm.history = make([]types.Message, 0)
 	cm.preservedAnalysis = make([]string, 0)
 	cm.lastMessageType = MessageTypeUnknown
@@ -387,10 +437,40 @@ func (cm *ContextManager) Reset() {
 //   - Parsed channels from the content
 //   - Error if parsing fails
 func (cm *ContextManager) ExtractHarmonyChannels(content string) ([]parser.Channel, error) {
+	// This method doesn't access ContextManager state, so no mutex needed
 	if !parser.IsHarmonyFormat(content) {
 		return nil, fmt.Errorf("content is not in Harmony format")
 	}
 	
 	channels := parser.ExtractChannels(content)
 	return channels, nil
+}
+
+// enforceMemoryBounds limits history size to prevent unbounded memory growth
+// Uses sliding window approach to keep most recent messages while maintaining
+// index consistency for preservation logic
+func (cm *ContextManager) enforceMemoryBounds() {
+	if len(cm.history) <= MaxHistoryLength {
+		return
+	}
+	
+	// Calculate how many messages to remove from the beginning
+	excess := len(cm.history) - MaxHistoryLength
+	
+	// Adjust lastFinalMessageIdx after truncation
+	if cm.lastFinalMessageIdx >= 0 {
+		cm.lastFinalMessageIdx -= excess
+		// If the final message was truncated, reset the index
+		if cm.lastFinalMessageIdx < 0 {
+			cm.lastFinalMessageIdx = -1
+			// Clear preserved analysis since reference point was lost
+			cm.preservedAnalysis = make([]string, 0)
+		}
+	}
+	
+	// Truncate history to keep only recent messages
+	// Use copy to ensure old messages are eligible for garbage collection
+	newHistory := make([]types.Message, MaxHistoryLength)
+	copy(newHistory, cm.history[excess:])
+	cm.history = newHistory
 }
