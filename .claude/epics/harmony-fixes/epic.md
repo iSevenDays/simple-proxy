@@ -3,11 +3,11 @@ epic: harmony-fixes
 prd: harmony-fixes
 status: active
 priority: high
-progress: 50%
+progress: 25%
 created: 2025-08-28
-updated: 
+updated: 2025-08-29T11:36:07Z
 sprint_duration: 4_weeks
-github: https://github.com//issues/14
+github: https://github.com/iSevenDays/simple-proxy/issues/14
 ---
 
 # Epic: Harmony Format Parsing Fixes
