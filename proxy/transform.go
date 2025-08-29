@@ -3,6 +3,7 @@ package proxy
 import (
 	"claude-proxy/config"
 	"claude-proxy/correction"
+	"claude-proxy/harmony"
 	"claude-proxy/logger"
 	"claude-proxy/parser"
 	"claude-proxy/types"
@@ -11,6 +12,23 @@ import (
 	"fmt"
 	"strings"
 )
+
+// Context key for storing ContextManager between request and response transformations
+type contextManagerKey struct{}
+
+// withContextManager stores the ContextManager in the context
+func withContextManager(ctx context.Context, cm *harmony.ContextManager) context.Context {
+	return context.WithValue(ctx, contextManagerKey{}, cm)
+}
+
+// contextManagerFromContext retrieves the ContextManager from the context
+func contextManagerFromContext(ctx context.Context) *harmony.ContextManager {
+	if cm, ok := ctx.Value(contextManagerKey{}).(*harmony.ContextManager); ok {
+		return cm
+	}
+	// Return a new context manager if none found (fallback for backward compatibility)
+	return harmony.NewContextManager()
+}
 
 // NOTE: isSmallModel and shouldLogForModel functions removed
 // This logic is now handled by the logger.ConfigAdapter
@@ -127,10 +145,13 @@ func TransformAnthropicToOpenAI(ctx context.Context, req types.AnthropicRequest,
 	loggerConfig := logger.NewConfigAdapter(cfg)
 	loggerInstance := logger.FromContext(ctx, loggerConfig)
 
+	// Create ContextManager for Harmony compliance (OpenAI Harmony guide point 3)
+	contextManager := harmony.NewContextManager()
+
 	// HARMONY DETECTION AND PROCESSING - Chain of responsibility pattern
 	// Check for Harmony format in messages and process if enabled
 	if cfg.IsHarmonyParsingEnabled() {
-		harmonyProcessed, err := processHarmonyMessages(ctx, &req, cfg, loggerInstance)
+		harmonyProcessed, err := processHarmonyMessages(ctx, &req, cfg, loggerInstance, contextManager)
 		if err != nil {
 			if cfg.IsHarmonyStrictModeEnabled() {
 				// In strict mode, fail the request on Harmony parsing errors
@@ -637,6 +658,9 @@ func TransformOpenAIToAnthropic(ctx context.Context, resp *types.OpenAIResponse,
 	loggerConfig := logger.NewConfigAdapter(cfg)
 	loggerInstance := logger.FromContext(ctx, loggerConfig)
 
+	// Get or create ContextManager for tracking response messages (for future preservation)
+	contextManager := contextManagerFromContext(ctx)
+
 	if len(resp.Choices) == 0 {
 		return nil, fmt.Errorf("no choices in OpenAI response")
 	}
@@ -790,6 +814,19 @@ func TransformOpenAIToAnthropic(ctx context.Context, resp *types.OpenAIResponse,
 		},
 	}
 
+	// Update ContextManager with the response message for future preservation logic
+	// This tracks whether this response contained tool calls or final messages
+	if cfg.IsHarmonyParsingEnabled() {
+		responseMessage := types.Message{
+			Role:    "assistant",
+			Content: content, // This is []types.Content format
+		}
+		contextManager.UpdateHistory(responseMessage)
+		
+		loggerInstance.Debug("🔄 Updated ContextManager with response message (type: %s, preserve: %t)",
+			contextManager.GetLastMessageType().String(), contextManager.ShouldPreserveAnalysis())
+	}
+
 	// Log response transformation summary
 	loggerInstance.Debug("✅ Transformed response: %d content items, stop_reason: %s",
 		len(content), stopReason)
@@ -861,9 +898,80 @@ func extractUserText(msg types.Message) string {
 }
 
 // processHarmonyMessages processes harmony format detection and parsing
-// This is a stub implementation for compilation - Issue #8 fix
-func processHarmonyMessages(ctx context.Context, req *types.AnthropicRequest, cfg *config.Config, loggerInstance logger.Logger) (bool, error) {
-	// For now, return false (not processed) to maintain existing behavior
-	// This function would be fully implemented as part of complete Harmony integration
+// Implements OpenAI Harmony guide compliance for analysis message preservation
+func processHarmonyMessages(ctx context.Context, req *types.AnthropicRequest, cfg *config.Config, loggerInstance logger.Logger, contextManager *harmony.ContextManager) (bool, error) {
+	if !cfg.IsHarmonyParsingEnabled() {
+		return false, nil
+	}
+
+	// Update context manager with conversation history for proper preservation logic
+	// Process messages in chronological order to track conversation state properly
+	for _, msg := range req.Messages {
+		contextManager.UpdateHistory(msg)
+	}
+
+	// Check if we should preserve analysis based on conversation history BEFORE checking for harmony
+	// This implements OpenAI Harmony guide point 3: preserve analysis after tool calls
+	if contextManager.ShouldPreserveAnalysis() {
+		preservedContext := contextManager.BuildPreservedContext()
+		if preservedContext != "" {
+			loggerInstance.Debug("📝 Preserving analysis context according to Harmony guide point 3: %d characters", len(preservedContext))
+			
+			// Add preserved analysis as the first message in the conversation
+			// This follows the OpenAI Harmony guide recommendation to include preserved analysis in context
+			if len(req.Messages) > 0 {
+				// Find the last user message to append preserved context
+				// This ensures preserved analysis appears right before the current request
+				for i := len(req.Messages) - 1; i >= 0; i-- {
+					if req.Messages[i].Role == "user" {
+						// Append preserved analysis to the last user message content
+						switch content := req.Messages[i].Content.(type) {
+						case string:
+							req.Messages[i].Content = content + "\n\n" + preservedContext
+						case []types.Content:
+							// Add as last content item
+							newContent := make([]types.Content, len(content))
+							copy(newContent, content)
+							newContent = append(newContent, types.Content{
+								Type: "text",
+								Text: preservedContext,
+							})
+							req.Messages[i].Content = newContent
+						}
+						loggerInstance.Debug("✅ Added preserved analysis to user message %d", i)
+						break
+					}
+				}
+			}
+		}
+	}
+
+	// Check if any message content contains Harmony format
+	hasHarmony := false
+	for _, msg := range req.Messages {
+		var content string
+		switch c := msg.Content.(type) {
+		case string:
+			content = c
+		case []types.Content:
+			// Concatenate text content for Harmony detection
+			for _, item := range c {
+				if item.Type == "text" {
+					content += item.Text + " "
+				}
+			}
+		}
+		
+		if parser.IsHarmonyFormat(content) {
+			hasHarmony = true
+			break
+		}
+	}
+
+	if hasHarmony {
+		loggerInstance.Debug("🔍 Harmony format detected in request messages")
+		return true, nil
+	}
+
 	return false, nil
 }

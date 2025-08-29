@@ -12,12 +12,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// getTestConfig returns a default config for testing
-func getTestConfig() *config.Config {
-	return &config.Config{
-		SkipTools: []string{}, // No tools skipped by default
-	}
-}
 
 // TestAnthropicToOpenAITransform tests request format conversion
 // Following SPARC: Clear test structure with comprehensive edge cases

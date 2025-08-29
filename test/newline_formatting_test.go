@@ -1157,14 +1157,3 @@ func countNewlines(s string) int {
 	return count
 }
 
-// Helper function for test convenience
-func stringPtr(s string) *string {
-	return &s
-}
-
-// Helper function to get test configuration
-func getTestConfig() *config.Config {
-	return &config.Config{
-		HarmonyParsingEnabled: false,
-	}
-}

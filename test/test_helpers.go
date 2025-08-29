@@ -18,6 +18,15 @@ func stringPtr(s string) *string {
 	return &s
 }
 
+// getTestConfig helper function for creating test configuration
+// Shared across all test files to avoid duplication
+func getTestConfig() *config.Config {
+	return &config.Config{
+		HarmonyParsingEnabled: false,
+		SkipTools:            []string{}, // No tools skipped by default
+	}
+}
+
 // MockConfigProvider provides a mock ConfigProvider for testing
 type MockConfigProvider struct {
 	Endpoint string
