@@ -180,13 +180,13 @@ func TestDetailedOfficialComplianceAnalysis(t *testing.T) {
 		}
 
 		currentlySupported := map[string]bool{
-			"<|start|>":     true,  // ✅ Handled in regex
-			"<|end|>":       true,  // ✅ Handled in regex
-			"<|message|>":   true,  // ✅ Handled in regex
-			"<|channel|>":   true,  // ✅ Handled in regex
-			"<|constrain|>": false, // ❌ Missing from regex patterns
-			"<|return|>":    true,  // ✅ Handled as alternative to <|end|>
-			"<|call|>":      false, // ❌ Missing from regex patterns
+			"<|start|>":     true, // ✅ Handled in regex
+			"<|end|>":       true, // ✅ Handled in regex
+			"<|message|>":   true, // ✅ Handled in regex
+			"<|channel|>":   true, // ✅ Handled in regex
+			"<|constrain|>": true, // ✅ Implemented with ConstraintType field
+			"<|return|>":    true, // ✅ Handled as alternative to <|end|>
+			"<|call|>":      true, // ✅ Implemented as stop token
 		}
 
 		t.Log("OpenAI Harmony Token Coverage Analysis:")

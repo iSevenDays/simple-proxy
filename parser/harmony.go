@@ -533,6 +533,7 @@ type TokenRecognizer struct {
 	channelPattern   *regexp.Regexp
 	messagePattern   *regexp.Regexp
 	constrainPattern *regexp.Regexp
+	callPattern      *regexp.Regexp
 	fullPattern      *regexp.Regexp
 	partialPattern   *regexp.Regexp
 }
@@ -570,7 +571,7 @@ func NewTokenRecognizer() (*TokenRecognizer, error) {
 		return nil, fmt.Errorf("failed to compile start pattern: %w", err)
 	}
 
-	endPattern, err := regexp.Compile(`<\|(?:end|return)\|>`)
+	endPattern, err := regexp.Compile(`<\|(?:end|return|call)\|>`)
 	if err != nil {
 		return nil, fmt.Errorf("failed to compile end pattern: %w", err)
 	}
@@ -590,14 +591,19 @@ func NewTokenRecognizer() (*TokenRecognizer, error) {
 		return nil, fmt.Errorf("failed to compile constrain pattern: %w", err)
 	}
 
+	callPattern, err := regexp.Compile(`<\|call\|>`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to compile call pattern: %w", err)
+	}
+
 	// Full pattern for complete token sequences with start token, now with optional constrain token
-	fullPattern, err := regexp.Compile(`(?s)<\|start\|>([^<|]+?)(?:<\|channel\|>([^<|]+?))?(?:<\|constrain\|>(\w+))?<\|message\|>(.*?)<\|(?:end|return)\|>`)
+	fullPattern, err := regexp.Compile(`(?s)<\|start\|>([^<|]+?)(?:<\|channel\|>([^<|]+?))?(?:<\|constrain\|>(\w+))?<\|message\|>(.*?)<\|(?:end|return|call)\|>`)
 	if err != nil {
 		return nil, fmt.Errorf("failed to compile full pattern: %w", err)
 	}
 
 	// Partial pattern for sequences without start token (fallback), also with optional constrain
-	partialPattern, err := regexp.Compile(`(?s)<\|channel\|>([^<|]+?)(?:<\|constrain\|>(\w+))?<\|message\|>(.*?)<\|(?:end|return)\|>`)
+	partialPattern, err := regexp.Compile(`(?s)<\|channel\|>([^<|]+?)(?:<\|constrain\|>(\w+))?<\|message\|>(.*?)<\|(?:end|return|call)\|>`)
 	if err != nil {
 		return nil, fmt.Errorf("failed to compile partial pattern: %w", err)
 	}
@@ -608,6 +614,7 @@ func NewTokenRecognizer() (*TokenRecognizer, error) {
 		channelPattern:   channelPattern,
 		messagePattern:   messagePattern,
 		constrainPattern: constrainPattern,
+		callPattern:      callPattern,
 		fullPattern:      fullPattern,
 		partialPattern:   partialPattern,
 	}, nil
@@ -644,7 +651,8 @@ func (tr *TokenRecognizer) HasHarmonyTokens(content string) bool {
 		   tr.endPattern.MatchString(content) ||
 		   tr.channelPattern.MatchString(content) || 
 		   tr.messagePattern.MatchString(content) ||
-		   tr.constrainPattern.MatchString(content)
+		   tr.constrainPattern.MatchString(content) ||
+		   tr.callPattern.MatchString(content)
 }
 
 // ExtractTokens extracts all complete Harmony token sequences from content,
