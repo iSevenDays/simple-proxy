@@ -13,7 +13,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"strings"
 	"time"
 )
 
@@ -404,6 +403,11 @@ func (h *Handler) HandleAnthropicRequest(w http.ResponseWriter, r *http.Request)
 	} else {
 		// Client wants JSON response - return regular JSON
 		w.Header().Set("Content-Type", "application/json")
+		
+		// Log final response before sending to client
+		responseBytes, _ := json.Marshal(anthropicResp)
+		loggerInstance.Info("📤 Final response to client: %s", string(responseBytes))
+		
 		if err := json.NewEncoder(w).Encode(anthropicResp); err != nil {
 			loggerInstance.Error("❌ Failed to encode response: %v", err)
 		}
@@ -743,25 +747,38 @@ func (h *Handler) writeSSEEvent(w http.ResponseWriter, eventType string, data in
 	}
 }
 
-// splitTextForStreaming splits text into realistic chunks for streaming
+// splitTextForStreaming splits text into realistic chunks for streaming while preserving formatting
 func (h *Handler) splitTextForStreaming(text string) []string {
-	// Split by words for realistic streaming experience
-	words := strings.Fields(text)
+	if text == "" {
+		return []string{}
+	}
+
 	var chunks []string
-
-	chunkSize := 3 // Stream ~3 words at a time
-	for i := 0; i < len(words); i += chunkSize {
+	runes := []rune(text)
+	chunkSize := 150 // Target ~150 characters per chunk for better streaming experience
+	
+	for i := 0; i < len(runes); i += chunkSize {
 		end := i + chunkSize
-		if end > len(words) {
-			end = len(words)
+		if end > len(runes) {
+			end = len(runes)
 		}
 
-		chunk := strings.Join(words[i:end], " ")
-		if i > 0 {
-			chunk = " " + chunk // Add space between chunks
+		// Try to break at word boundaries to avoid splitting words
+		if end < len(runes) {
+			// Look back for the last space or newline within a reasonable range
+			for j := end; j > i+chunkSize/2 && j > i; j-- {
+				if runes[j] == ' ' || runes[j] == '\n' || runes[j] == '\t' {
+					end = j + 1 // Include the whitespace character
+					break
+				}
+			}
 		}
 
+		chunk := string(runes[i:end])
 		chunks = append(chunks, chunk)
+		
+		// Adjust next starting position
+		i = end - 1 // -1 because loop will increment
 	}
 
 	return chunks

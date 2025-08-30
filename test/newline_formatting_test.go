@@ -97,6 +97,390 @@ func TestNewlineFormattingPreservation(t *testing.T) {
 			expectedContent: "Here's the code:\n\n```go\nfunc main() {\n    fmt.Println(\"Hello\")\n    fmt.Println(\"World\")\n}\n```\n\nThis should work correctly.",
 			description:     "Should preserve code block formatting with newlines",
 		},
+		{
+			name: "complex_python_code_formatting",
+			openaiResponse: types.OpenAIResponse{
+				ID: "resp_python",
+				Choices: []types.OpenAIChoice{
+					{
+						Message: types.OpenAIMessage{
+							Role: "assistant",
+							Content: `Here's a Python class with proper formatting:
+
+` + "```python\n" + `class DataProcessor:
+    """
+    A class for processing data with various transformations.
+    
+    Attributes:
+        data (list): The input data to process
+        config (dict): Configuration parameters
+    """
+    
+    def __init__(self, data, config=None):
+        self.data = data
+        self.config = config or {
+            'normalize': True,
+            'remove_outliers': False,
+            'method': 'standard'
+        }
+    
+    def process(self):
+        """Process the data according to configuration."""
+        if self.config['normalize']:
+            return self._normalize()
+        return self.data
+    
+    def _normalize(self):
+        """Private method to normalize data."""
+        # Calculate mean and std
+        mean = sum(self.data) / len(self.data)
+        variance = sum((x - mean) ** 2 for x in self.data) / len(self.data)
+        std = variance ** 0.5
+        
+        # Return normalized values
+        return [(x - mean) / std for x in self.data]
+
+# Usage example:
+processor = DataProcessor([1, 2, 3, 4, 5])
+result = processor.process()
+print(f"Normalized data: {result}")
+` + "```\n\n" + `This class demonstrates:
+- Proper docstring formatting
+- Method definitions with consistent indentation
+- Dictionary comprehensions and list comprehensions
+- Comments and documentation
+- Multi-line expressions with proper alignment`,
+						},
+						FinishReason: stringPtr("stop"),
+					},
+				},
+			},
+			expectedContent: `Here's a Python class with proper formatting:
+
+` + "```python\n" + `class DataProcessor:
+    """
+    A class for processing data with various transformations.
+    
+    Attributes:
+        data (list): The input data to process
+        config (dict): Configuration parameters
+    """
+    
+    def __init__(self, data, config=None):
+        self.data = data
+        self.config = config or {
+            'normalize': True,
+            'remove_outliers': False,
+            'method': 'standard'
+        }
+    
+    def process(self):
+        """Process the data according to configuration."""
+        if self.config['normalize']:
+            return self._normalize()
+        return self.data
+    
+    def _normalize(self):
+        """Private method to normalize data."""
+        # Calculate mean and std
+        mean = sum(self.data) / len(self.data)
+        variance = sum((x - mean) ** 2 for x in self.data) / len(self.data)
+        std = variance ** 0.5
+        
+        # Return normalized values
+        return [(x - mean) / std for x in self.data]
+
+# Usage example:
+processor = DataProcessor([1, 2, 3, 4, 5])
+result = processor.process()
+print(f"Normalized data: {result}")
+` + "```\n\n" + `This class demonstrates:
+- Proper docstring formatting
+- Method definitions with consistent indentation
+- Dictionary comprehensions and list comprehensions
+- Comments and documentation
+- Multi-line expressions with proper alignment`,
+			description: "Should preserve complex Python code formatting with indentation, docstrings, and comments",
+		},
+		{
+			name: "latex_mathematical_expressions",
+			openaiResponse: types.OpenAIResponse{
+				ID: "resp_latex",
+				Choices: []types.OpenAIChoice{
+					{
+						Message: types.OpenAIMessage{
+							Role: "assistant",
+							Content: `Here are some mathematical expressions in LaTeX:
+
+**Inline Math:**
+The quadratic formula is $x = \frac{-b \pm \sqrt{b^2 - 4ac}}{2a}$ for equation $ax^2 + bx + c = 0$.
+
+**Display Math:**
+$$\int_{-\infty}^{\infty} e^{-x^2} dx = \sqrt{\pi}$$
+
+**Complex Equation:**
+$$
+\begin{align}
+\nabla \cdot \mathbf{E} &= \frac{\rho}{\varepsilon_0} \\
+\nabla \cdot \mathbf{B} &= 0 \\
+\nabla \times \mathbf{E} &= -\frac{\partial \mathbf{B}}{\partial t} \\
+\nabla \times \mathbf{B} &= \mu_0 \mathbf{J} + \mu_0 \varepsilon_0 \frac{\partial \mathbf{E}}{\partial t}
+\end{align}
+$$
+
+**Matrix Representation:**
+$$
+\mathbf{A} = \begin{pmatrix}
+a_{11} & a_{12} & \cdots & a_{1n} \\
+a_{21} & a_{22} & \cdots & a_{2n} \\
+\vdots & \vdots & \ddots & \vdots \\
+a_{m1} & a_{m2} & \cdots & a_{mn}
+\end{pmatrix}
+$$
+
+**Summation and Integration:**
+$$
+\sum_{n=1}^{\infty} \frac{1}{n^2} = \frac{\pi^2}{6}, \quad \text{and} \quad \int_0^1 x^n dx = \frac{1}{n+1}
+$$
+
+These expressions require precise formatting to render correctly.`,
+						},
+						FinishReason: stringPtr("stop"),
+					},
+				},
+			},
+			expectedContent: `Here are some mathematical expressions in LaTeX:
+
+**Inline Math:**
+The quadratic formula is $x = \frac{-b \pm \sqrt{b^2 - 4ac}}{2a}$ for equation $ax^2 + bx + c = 0$.
+
+**Display Math:**
+$$\int_{-\infty}^{\infty} e^{-x^2} dx = \sqrt{\pi}$$
+
+**Complex Equation:**
+$$
+\begin{align}
+\nabla \cdot \mathbf{E} &= \frac{\rho}{\varepsilon_0} \\
+\nabla \cdot \mathbf{B} &= 0 \\
+\nabla \times \mathbf{E} &= -\frac{\partial \mathbf{B}}{\partial t} \\
+\nabla \times \mathbf{B} &= \mu_0 \mathbf{J} + \mu_0 \varepsilon_0 \frac{\partial \mathbf{E}}{\partial t}
+\end{align}
+$$
+
+**Matrix Representation:**
+$$
+\mathbf{A} = \begin{pmatrix}
+a_{11} & a_{12} & \cdots & a_{1n} \\
+a_{21} & a_{22} & \cdots & a_{2n} \\
+\vdots & \vdots & \ddots & \vdots \\
+a_{m1} & a_{m2} & \cdots & a_{mn}
+\end{pmatrix}
+$$
+
+**Summation and Integration:**
+$$
+\sum_{n=1}^{\infty} \frac{1}{n^2} = \frac{\pi^2}{6}, \quad \text{and} \quad \int_0^1 x^n dx = \frac{1}{n+1}
+$$
+
+These expressions require precise formatting to render correctly.`,
+			description: "Should preserve LaTeX mathematical expressions with proper alignment and spacing",
+		},
+		{
+			name: "advanced_markdown_formatting",
+			openaiResponse: types.OpenAIResponse{
+				ID: "resp_advanced_md",
+				Choices: []types.OpenAIChoice{
+					{
+						Message: types.OpenAIMessage{
+							Role: "assistant",
+							Content: `# Advanced Markdown Formatting Test
+
+## Table with Complex Content
+
+| Feature | Description | Example |
+|---------|-------------|---------|
+| **Bold Text** | Makes text bold | ` + "`**bold**`" + ` |
+| *Italic Text* | Makes text italic | ` + "`*italic*`" + ` |
+| ` + "`Code`" + ` | Inline code | ` + "```code```" + ` |
+| [Links](https://example.com) | Hyperlinks | ` + "`[text](url)`" + ` |
+
+## Nested Lists with Code
+
+1. **Setup Phase**
+   - Initialize configuration
+   - Load dependencies:
+     ` + "```bash" + `
+     npm install express
+     npm install --save-dev jest
+     ` + "```" + `
+   
+2. **Implementation Phase**
+   - Write core logic:
+     ` + "```javascript" + `
+     const express = require('express');
+     const app = express();
+     
+     app.get('/', (req, res) => {
+         res.json({ message: 'Hello World!' });
+     });
+     ` + "```" + `
+   - Add error handling
+   - Write tests
+
+3. **Deployment Phase**
+   - Build application
+   - Configure server
+   - Deploy to production
+
+## Blockquotes with Citations
+
+> "The best way to predict the future is to invent it."
+> 
+> — Alan Kay
+
+> **Note:** This is a multi-line blockquote that contains
+> important information that spans multiple lines
+> and should preserve its formatting.
+
+## Mixed Content
+
+Here's some text with ` + "`inline code`" + `, **bold text**, and *italics*.
+
+### Code with Comments
+
+` + "```typescript" + `
+interface User {
+    id: number;           // Unique identifier
+    name: string;         // Full name
+    email: string;        // Contact email
+    roles: string[];      // User permissions
+    created: Date;        // Account creation
+}
+
+// Factory function for creating users
+function createUser(data: Partial<User>): User {
+    return {
+        id: Date.now(),
+        name: data.name || 'Anonymous',
+        email: data.email || '',
+        roles: data.roles || ['user'],
+        created: new Date()
+    };
+}
+` + "```" + `
+
+### Final Notes
+
+- Preserve all whitespace
+- Maintain indentation
+- Keep line breaks
+- Honor table structure`,
+						},
+						FinishReason: stringPtr("stop"),
+					},
+				},
+			},
+			expectedContent: `# Advanced Markdown Formatting Test
+
+## Table with Complex Content
+
+| Feature | Description | Example |
+|---------|-------------|---------|
+| **Bold Text** | Makes text bold | ` + "`**bold**`" + ` |
+| *Italic Text* | Makes text italic | ` + "`*italic*`" + ` |
+| ` + "`Code`" + ` | Inline code | ` + "```code```" + ` |
+| [Links](https://example.com) | Hyperlinks | ` + "`[text](url)`" + ` |
+
+## Nested Lists with Code
+
+1. **Setup Phase**
+   - Initialize configuration
+   - Load dependencies:
+     ` + "```bash" + `
+     npm install express
+     npm install --save-dev jest
+     ` + "```" + `
+   
+2. **Implementation Phase**
+   - Write core logic:
+     ` + "```javascript" + `
+     const express = require('express');
+     const app = express();
+     
+     app.get('/', (req, res) => {
+         res.json({ message: 'Hello World!' });
+     });
+     ` + "```" + `
+   - Add error handling
+   - Write tests
+
+3. **Deployment Phase**
+   - Build application
+   - Configure server
+   - Deploy to production
+
+## Blockquotes with Citations
+
+> "The best way to predict the future is to invent it."
+> 
+> — Alan Kay
+
+> **Note:** This is a multi-line blockquote that contains
+> important information that spans multiple lines
+> and should preserve its formatting.
+
+## Mixed Content
+
+Here's some text with ` + "`inline code`" + `, **bold text**, and *italics*.
+
+### Code with Comments
+
+` + "```typescript" + `
+interface User {
+    id: number;           // Unique identifier
+    name: string;         // Full name
+    email: string;        // Contact email
+    roles: string[];      // User permissions
+    created: Date;        // Account creation
+}
+
+// Factory function for creating users
+function createUser(data: Partial<User>): User {
+    return {
+        id: Date.now(),
+        name: data.name || 'Anonymous',
+        email: data.email || '',
+        roles: data.roles || ['user'],
+        created: new Date()
+    };
+}
+` + "```" + `
+
+### Final Notes
+
+- Preserve all whitespace
+- Maintain indentation
+- Keep line breaks
+- Honor table structure`,
+			description: "Should preserve advanced markdown with tables, nested lists, blockquotes, and mixed formatting",
+		},
+		{
+			name: "whitespace_edge_cases",
+			openaiResponse: types.OpenAIResponse{
+				ID: "resp_whitespace",
+				Choices: []types.OpenAIChoice{
+					{
+						Message: types.OpenAIMessage{
+							Role: "assistant",
+							Content: "Line 1\n\n\nTriple newlines above\n\t\tTabs for indentation\n    Four spaces indentation\n \n  \nLines with only spaces\n\nTrailing spaces:    \nMore content\n\r\nWindows line ending\nFinal line",
+						},
+						FinishReason: stringPtr("stop"),
+					},
+				},
+			},
+			expectedContent: "Line 1\n\n\nTriple newlines above\n\t\tTabs for indentation\n    Four spaces indentation\n \n  \nLines with only spaces\n\nTrailing spaces:    \nMore content\n\r\nWindows line ending\nFinal line",
+			description:     "Should preserve all types of whitespace including tabs, multiple spaces, and different line endings",
+		},
 	}
 
 	for _, tt := range tests {
