@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"claude-proxy/types"
+	"strings"
 	"testing"
 	"time"
 
@@ -97,7 +98,7 @@ func TestSessionCacheConcurrency(t *testing.T) {
 
 // TestGenerateSessionID tests the session ID generation logic
 func TestGenerateSessionID(t *testing.T) {
-	// Test with messages
+	// Test with messages - same content within same second should generate same ID
 	req1 := &types.AnthropicRequest{
 		Model: "claude-3-haiku",
 		Messages: []types.Message{
@@ -123,17 +124,26 @@ func TestGenerateSessionID(t *testing.T) {
 	sessionID2 := generateSessionID(req2)
 	sessionID3 := generateSessionID(req3)
 
-	assert.Equal(t, sessionID1, sessionID2, "Same content should generate same session ID")
+	// Same content within same second generates same hash
+	assert.Equal(t, sessionID1, sessionID2, "Same content within same second should generate same session ID")
 	assert.NotEqual(t, sessionID1, sessionID3, "Different content should generate different session ID")
-	assert.Len(t, sessionID1, 16, "Session ID should be 16 characters long")
+	assert.Len(t, sessionID1, 64, "Session ID should be 64 characters long (SHA256 hash)")
 
-	// Test with no messages
+	// Test with no messages - should have unique timestamp suffix
 	req4 := &types.AnthropicRequest{
 		Model: "claude-3-haiku",
 		Messages: []types.Message{},
 	}
 	sessionID4 := generateSessionID(req4)
-	assert.Equal(t, "default", sessionID4, "Empty messages should use default session ID")
+	assert.True(t, strings.HasPrefix(sessionID4, "default-"), "Empty messages should use default prefix with timestamp")
+	
+	// Test that empty message requests get different IDs due to nanosecond timestamp
+	req5 := &types.AnthropicRequest{
+		Model: "claude-3-haiku",
+		Messages: []types.Message{},
+	}
+	sessionID5 := generateSessionID(req5)
+	assert.NotEqual(t, sessionID4, sessionID5, "Empty message requests should generate unique IDs with nanosecond precision")
 }
 
 // TestSessionCacheIntegration tests integration with actual request processing

@@ -1,11 +1,12 @@
 ---
 epic: harmony-fixes
 prd: harmony-fixes
-status: active
+status: completed
 priority: high
-progress: 25%
+progress: 100%
 created: 2025-08-28
-updated: 2025-08-29T11:36:07Z
+updated: 2025-08-29T11:55:20Z
+completed: 2025-08-29T11:55:20Z
 sprint_duration: 4_weeks
 github: https://github.com/iSevenDays/simple-proxy/issues/14
 ---
