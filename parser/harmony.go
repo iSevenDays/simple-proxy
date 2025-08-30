@@ -250,11 +250,12 @@ func (c ContentType) String() string {
 // Channels are immutable after parsing and can be safely passed between
 // goroutines for concurrent processing.
 type Channel struct {
-	Role        Role        `json:"role"`
-	ChannelType ChannelType `json:"channel_type"`
-	ContentType ContentType `json:"content_type"`
-	Content     string      `json:"content"`
-	RawChannel  string      `json:"raw_channel,omitempty"`
+	Role           Role        `json:"role"`
+	ChannelType    ChannelType `json:"channel_type"`
+	ContentType    ContentType `json:"content_type"`
+	Content        string      `json:"content"`
+	ConstraintType string      `json:"constraint_type,omitempty"`
+	RawChannel     string      `json:"raw_channel,omitempty"`
 }
 
 // IsThinking returns true if this channel contains thinking content that should
@@ -531,6 +532,7 @@ type TokenRecognizer struct {
 	endPattern       *regexp.Regexp
 	channelPattern   *regexp.Regexp
 	messagePattern   *regexp.Regexp
+	constrainPattern *regexp.Regexp
 	fullPattern      *regexp.Regexp
 	partialPattern   *regexp.Regexp
 }
@@ -573,7 +575,7 @@ func NewTokenRecognizer() (*TokenRecognizer, error) {
 		return nil, fmt.Errorf("failed to compile end pattern: %w", err)
 	}
 
-	channelPattern, err := regexp.Compile(`<\|channel\|>(\w+)`)
+	channelPattern, err := regexp.Compile(`<\|channel\|>([^<|]+)`)
 	if err != nil {
 		return nil, fmt.Errorf("failed to compile channel pattern: %w", err)
 	}
@@ -583,25 +585,31 @@ func NewTokenRecognizer() (*TokenRecognizer, error) {
 		return nil, fmt.Errorf("failed to compile message pattern: %w", err)
 	}
 
-	// Full pattern for complete token sequences with start token
-	fullPattern, err := regexp.Compile(`(?s)<\|start\|>(\w+)(?:<\|channel\|>(\w+))?<\|message\|>(.*?)<\|(?:end|return)\|>`)
+	constrainPattern, err := regexp.Compile(`<\|constrain\|>(\w+)`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to compile constrain pattern: %w", err)
+	}
+
+	// Full pattern for complete token sequences with start token, now with optional constrain token
+	fullPattern, err := regexp.Compile(`(?s)<\|start\|>([^<|]+?)(?:<\|channel\|>([^<|]+?))?(?:<\|constrain\|>(\w+))?<\|message\|>(.*?)<\|(?:end|return)\|>`)
 	if err != nil {
 		return nil, fmt.Errorf("failed to compile full pattern: %w", err)
 	}
 
-	// Partial pattern for sequences without start token (fallback)
-	partialPattern, err := regexp.Compile(`(?s)<\|channel\|>(\w+)<\|message\|>(.*?)<\|(?:end|return)\|>`)
+	// Partial pattern for sequences without start token (fallback), also with optional constrain
+	partialPattern, err := regexp.Compile(`(?s)<\|channel\|>([^<|]+?)(?:<\|constrain\|>(\w+))?<\|message\|>(.*?)<\|(?:end|return)\|>`)
 	if err != nil {
 		return nil, fmt.Errorf("failed to compile partial pattern: %w", err)
 	}
 
 	return &TokenRecognizer{
-		startPattern:   startPattern,
-		endPattern:     endPattern,
-		channelPattern: channelPattern,
-		messagePattern: messagePattern,
-		fullPattern:    fullPattern,
-		partialPattern: partialPattern,
+		startPattern:     startPattern,
+		endPattern:       endPattern,
+		channelPattern:   channelPattern,
+		messagePattern:   messagePattern,
+		constrainPattern: constrainPattern,
+		fullPattern:      fullPattern,
+		partialPattern:   partialPattern,
 	}, nil
 }
 
@@ -635,7 +643,8 @@ func (tr *TokenRecognizer) HasHarmonyTokens(content string) bool {
 	return tr.startPattern.MatchString(content) || 
 		   tr.endPattern.MatchString(content) ||
 		   tr.channelPattern.MatchString(content) || 
-		   tr.messagePattern.MatchString(content)
+		   tr.messagePattern.MatchString(content) ||
+		   tr.constrainPattern.MatchString(content)
 }
 
 // ExtractTokens extracts all complete Harmony token sequences from content,
@@ -690,13 +699,28 @@ func (tr *TokenRecognizer) ExtractTokens(content string) [][]string {
 	// Add partial matches, normalizing to include default role
 	for _, match := range partialMatches {
 		if len(match) >= 3 {
-			// Normalize to [full_match, role, channel, content] format
-			normalizedMatch := []string{
-				match[0],        // full matched sequence
-				"assistant",     // default role for partial sequences
-				match[1],        // channel type
-				match[2],        // message content
+			// Handle both constraint and non-constraint cases for partial matches
+			var normalizedMatch []string
+			
+			if len(match) == 4 {
+				// Partial with constraint: [full_match, channel, constraint, content]
+				normalizedMatch = []string{
+					match[0],        // full matched sequence
+					"assistant",     // default role for partial sequences
+					match[1],        // channel type
+					match[2],        // constraint type
+					match[3],        // message content
+				}
+			} else {
+				// Partial without constraint: [full_match, channel, content]
+				normalizedMatch = []string{
+					match[0],        // full matched sequence
+					"assistant",     // default role for partial sequences
+					match[1],        // channel type
+					match[2],        // message content
+				}
 			}
+			
 			allMatches = append(allMatches, normalizedMatch)
 		}
 	}
@@ -789,18 +813,30 @@ func ExtractChannels(content string) []Channel {
 		
 		roleStr := match[1]
 		channelStr := match[2]
-		messageContent := match[3]
+		constraintStr := ""
+		messageContent := ""
+		
+		// Handle both old 4-element format and new 5-element format with constraint
+		if len(match) == 5 {
+			// New format: [full_match, role, channel, constraint, content]
+			constraintStr = match[3]
+			messageContent = match[4]
+		} else {
+			// Old format: [full_match, role, channel, content]  
+			messageContent = match[3]
+		}
 		
 		role := ParseRole(roleStr)
 		channelType := ParseChannelType(channelStr)
 		contentType := DetermineContentType(channelType)
 		
 		channel := Channel{
-			Role:        role,
-			ChannelType: channelType,
-			ContentType: contentType,
-			Content:     strings.TrimSpace(messageContent),
-			RawChannel:  channelStr,
+			Role:           role,
+			ChannelType:    channelType,
+			ContentType:    contentType,
+			Content:        strings.TrimSpace(messageContent),
+			ConstraintType: constraintStr,
+			RawChannel:     channelStr,
 		}
 		
 		channels = append(channels, channel)

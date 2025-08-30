@@ -3,3 +3,4 @@ logs/*.jsonl
 .env
 simple-proxy
 simple-proxy
+claude-proxy
