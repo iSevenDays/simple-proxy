@@ -757,7 +757,7 @@ func (h *Handler) splitTextForStreaming(text string) []string {
 	runes := []rune(text)
 	chunkSize := 150 // Target ~150 characters per chunk for better streaming experience
 	
-	for i := 0; i < len(runes); i += chunkSize {
+	for i := 0; i < len(runes); {
 		end := i + chunkSize
 		if end > len(runes) {
 			end = len(runes)
@@ -777,8 +777,8 @@ func (h *Handler) splitTextForStreaming(text string) []string {
 		chunk := string(runes[i:end])
 		chunks = append(chunks, chunk)
 		
-		// Adjust next starting position
-		i = end - 1 // -1 because loop will increment
+		// Move to next position (fixed: no character skipping)
+		i = end
 	}
 
 	return chunks
