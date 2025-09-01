@@ -35,6 +35,8 @@ SMALL_MODEL_API_KEY=test-key
 CORRECTION_MODEL=custom-correction-model
 TOOL_CORRECTION_ENDPOINT=http://test:11434/v1/chat/completions
 TOOL_CORRECTION_API_KEY=test-key
+LOG_FULL_TOOLS=false
+CONVERSATION_TRUNCATION=false
 `,
 			expectedBig:   "custom-big-model",
 			expectedSmall: "custom-small-model",
@@ -70,6 +72,8 @@ SMALL_MODEL_API_KEY=test-key
 CORRECTION_MODEL=correction-with-comments
 TOOL_CORRECTION_ENDPOINT=http://test:11434/v1/chat/completions
 TOOL_CORRECTION_API_KEY=test-key
+LOG_FULL_TOOLS=false
+CONVERSATION_TRUNCATION=false
 # End of config
 `,
 			expectedBig:   "big-with-comments",

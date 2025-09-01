@@ -13,6 +13,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 )
 
@@ -24,6 +25,209 @@ type Handler struct {
 	conversationSessionID string
 	loopDetector          *loop.LoopDetector
 	obsLogger             *logger.ObservabilityLogger
+}
+
+// StreamChunk represents a streaming chunk with type information
+type StreamChunk struct {
+	Type    string      // "text_delta", "input_json_delta", etc.
+	Event   string      // SSE event type
+	Data    interface{} // event data
+}
+
+// ChunkBuffer buffers streaming chunks and merges consecutive chunks of same type
+type ChunkBuffer struct {
+	chunks     []StreamChunk
+	timer      *time.Timer
+	mu         sync.Mutex
+	flushFunc  func([]StreamChunk)
+	bufferTime time.Duration
+	writer     http.ResponseWriter
+	handler    *Handler
+}
+
+// newChunkBuffer creates a new chunk buffer for streaming
+func (h *Handler) newChunkBuffer(w http.ResponseWriter, bufferTime time.Duration) *ChunkBuffer {
+	cb := &ChunkBuffer{
+		chunks:     make([]StreamChunk, 0),
+		bufferTime: bufferTime,
+		writer:     w,
+		handler:    h,
+	}
+	
+	cb.flushFunc = func(chunks []StreamChunk) {
+		h.flushChunks(w, chunks)
+	}
+	
+	return cb
+}
+
+// addChunk adds a chunk to the buffer and manages timing
+func (cb *ChunkBuffer) addChunk(chunk StreamChunk) {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+
+	cb.chunks = append(cb.chunks, chunk)
+
+	// Reset timer
+	if cb.timer != nil {
+		cb.timer.Stop()
+	}
+
+	cb.timer = time.AfterFunc(cb.bufferTime, func() {
+		cb.flush()
+	})
+}
+
+// flush sends buffered chunks and clears the buffer
+func (cb *ChunkBuffer) flush() {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+
+	if len(cb.chunks) == 0 {
+		return
+	}
+
+	// Merge consecutive content_block_delta chunks with same index and type
+	mergedChunks := cb.mergeConsecutiveDeltas()
+
+	// Send merged chunks
+	if cb.flushFunc != nil {
+		cb.flushFunc(mergedChunks)
+	}
+
+	// Clear buffer
+	cb.chunks = cb.chunks[:0]
+	if cb.timer != nil {
+		cb.timer.Stop()
+		cb.timer = nil
+	}
+}
+
+// forceFlush immediately flushes the buffer (for cleanup)
+func (cb *ChunkBuffer) forceFlush() {
+	if cb.timer != nil {
+		cb.timer.Stop()
+	}
+	cb.flush()
+}
+
+// mergeConsecutiveDeltas merges consecutive content_block_delta chunks
+func (cb *ChunkBuffer) mergeConsecutiveDeltas() []StreamChunk {
+	if len(cb.chunks) == 0 {
+		return []StreamChunk{}
+	}
+
+	merged := make([]StreamChunk, 0, len(cb.chunks))
+	
+	for i := 0; i < len(cb.chunks); i++ {
+		current := cb.chunks[i]
+		
+		// Only merge content_block_delta events
+		if current.Event == "content_block_delta" {
+			// Extract index and delta type from current chunk
+			currentData, ok := current.Data.(map[string]interface{})
+			if !ok {
+				merged = append(merged, current)
+				continue
+			}
+			
+			currentIndex, hasIndex := currentData["index"]
+			currentDelta, hasDelta := currentData["delta"]
+			if !hasIndex || !hasDelta {
+				merged = append(merged, current)
+				continue
+			}
+			
+			currentDeltaMap, ok := currentDelta.(map[string]interface{})
+			if !ok {
+				merged = append(merged, current)
+				continue
+			}
+			
+			currentType, hasType := currentDeltaMap["type"]
+			if !hasType {
+				merged = append(merged, current)
+				continue
+			}
+
+			// Look ahead and merge consecutive chunks with same index and type
+			mergedDeltaMap := make(map[string]interface{})
+			for k, v := range currentDeltaMap {
+				mergedDeltaMap[k] = v
+			}
+			
+			// Merge text content
+			if currentType == "text_delta" {
+				mergedText := ""
+				if text, hasText := currentDeltaMap["text"].(string); hasText {
+					mergedText = text
+				}
+				
+				// Look ahead for more text_delta chunks with same index
+				for j := i + 1; j < len(cb.chunks); j++ {
+					next := cb.chunks[j]
+					if next.Event != "content_block_delta" {
+						break
+					}
+					
+					nextData, ok := next.Data.(map[string]interface{})
+					if !ok {
+						break
+					}
+					
+					nextIndex, hasIndex := nextData["index"]
+					nextDelta, hasDelta := nextData["delta"]
+					if !hasIndex || !hasDelta || nextIndex != currentIndex {
+						break
+					}
+					
+					nextDeltaMap, ok := nextDelta.(map[string]interface{})
+					if !ok {
+						break
+					}
+					
+					nextType, hasType := nextDeltaMap["type"]
+					if !hasType || nextType != "text_delta" {
+						break
+					}
+					
+					if nextText, hasText := nextDeltaMap["text"].(string); hasText {
+						mergedText += nextText
+						i = j // Skip this chunk
+					} else {
+						break
+					}
+				}
+				
+				mergedDeltaMap["text"] = mergedText
+			}
+			
+			// Create merged chunk
+			mergedData := map[string]interface{}{
+				"type":  "content_block_delta",
+				"index": currentIndex,
+				"delta": mergedDeltaMap,
+			}
+			
+			merged = append(merged, StreamChunk{
+				Type:  current.Type,
+				Event: current.Event,
+				Data:  mergedData,
+			})
+		} else {
+			// Non-delta chunks are not merged
+			merged = append(merged, current)
+		}
+	}
+	
+	return merged
+}
+
+// flushChunks sends chunks via SSE
+func (h *Handler) flushChunks(w http.ResponseWriter, chunks []StreamChunk) {
+	for _, chunk := range chunks {
+		h.writeSSEEvent(w, chunk.Event, chunk.Data)
+	}
 }
 
 // NewHandler creates a new proxy handler
@@ -596,12 +800,16 @@ func boolToYesNo(b bool) string {
 	return "NO"
 }
 
-// sendStreamingResponse sends an Anthropic response as SSE streaming format
+// sendStreamingResponse sends an Anthropic response as SSE streaming format with buffering
 func (h *Handler) sendStreamingResponse(w http.ResponseWriter, resp *types.AnthropicResponse, logger logger.Logger) {
 	// Set SSE headers
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
+
+	// Create chunk buffer with 500ms merge window (your brilliant idea!)
+	chunkBuffer := h.newChunkBuffer(w, 500*time.Millisecond)
+	defer chunkBuffer.forceFlush() // Ensure cleanup
 
 	// Generate message ID if not present
 	messageID := resp.ID
@@ -609,7 +817,7 @@ func (h *Handler) sendStreamingResponse(w http.ResponseWriter, resp *types.Anthr
 		messageID = fmt.Sprintf("msg_%d", time.Now().UnixNano())
 	}
 
-	// Send message_start event
+	// Send message_start event immediately (not buffered)
 	messageStartEvent := map[string]interface{}{
 		"type": "message_start",
 		"message": map[string]interface{}{
@@ -631,7 +839,7 @@ func (h *Handler) sendStreamingResponse(w http.ResponseWriter, resp *types.Anthr
 
 	// Send content blocks
 	for index, content := range resp.Content {
-		// Send content_block_start event
+		// Send content_block_start event immediately (not buffered)
 		var contentBlock interface{}
 
 		if content.Type == "text" {
@@ -656,7 +864,7 @@ func (h *Handler) sendStreamingResponse(w http.ResponseWriter, resp *types.Anthr
 
 		h.writeSSEEvent(w, "content_block_start", contentBlockStartEvent)
 
-		// Send content_block_delta events
+		// Send content_block_delta events via buffer (this is where the magic happens!)
 		if content.Type == "text" && content.Text != "" {
 			// Split text into chunks for realistic streaming simulation
 			textChunks := h.splitTextForStreaming(content.Text)
@@ -672,7 +880,12 @@ func (h *Handler) sendStreamingResponse(w http.ResponseWriter, resp *types.Anthr
 					"delta": delta,
 				}
 
-				h.writeSSEEvent(w, "content_block_delta", deltaEvent)
+				// Add to buffer instead of immediate send - this prevents command splitting!
+				chunkBuffer.addChunk(StreamChunk{
+					Type:  "text_delta",
+					Event: "content_block_delta",
+					Data:  deltaEvent,
+				})
 			}
 		} else if content.Type == "tool_use" {
 			// Stream tool input JSON
@@ -691,12 +904,20 @@ func (h *Handler) sendStreamingResponse(w http.ResponseWriter, resp *types.Anthr
 						"delta": delta,
 					}
 
-					h.writeSSEEvent(w, "content_block_delta", deltaEvent)
+					// Add to buffer
+					chunkBuffer.addChunk(StreamChunk{
+						Type:  "input_json_delta", 
+						Event: "content_block_delta",
+						Data:  deltaEvent,
+					})
 				}
 			}
 		}
 
-		// Send content_block_stop event
+		// Flush buffer before sending block_stop to ensure all deltas are sent
+		chunkBuffer.forceFlush()
+
+		// Send content_block_stop event immediately (not buffered)
 		contentBlockStopEvent := map[string]interface{}{
 			"type":  "content_block_stop",
 			"index": index,
