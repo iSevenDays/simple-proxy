@@ -14,7 +14,7 @@ func GetRequestID(ctx context.Context) string {
 	if id, ok := ctx.Value(RequestIDKey).(string); ok {
 		return id
 	}
-	return "unknown"
+	return ""
 }
 
 // WithRequestID adds a request ID to the context
